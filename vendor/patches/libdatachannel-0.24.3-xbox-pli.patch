@@ -1,0 +1,14 @@
+diff --git a/src/rtcpreceivingsession.cpp b/src/rtcpreceivingsession.cpp
+index 1641700..26595e0 100644
+--- a/src/rtcpreceivingsession.cpp
++++ b/src/rtcpreceivingsession.cpp
+@@ -179,6 +179,8 @@ void RtcpReceivingSession::pushPLI(const message_callback &send) {
+ 	auto message = make_message(RtcpPli::Size(), Message::Control);
+ 	auto *pli = reinterpret_cast<RtcpPli *>(message->data());
+-	pli->preparePacket(mSsrc);
++	pli->header.header.prepareHeader(206, 1, 2);
++	pli->header.setPacketSenderSSRC(0);
++	pli->header.setMediaSourceSSRC(mSsrc);
+ 	send(message);
+ }
+ 

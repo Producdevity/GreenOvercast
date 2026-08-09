@@ -1,0 +1,8 @@
+# Applies to project-owned C/C++ only (adapters, HIL tools).
+# Vendored third-party sources under vendor/ are never reformatted.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: None
+KeepEmptyLinesAtTheStartOfBlocks: false

@@ -1,0 +1,12 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/bootstrap.sh
+      - run: tools/zig.sh build fmt-check
+      - run: tools/zig.sh build test
+      - run: tools/zig.sh build smoke
+      - run: tools/zig.sh build product-check

@@ -1,0 +1,35 @@
+{
+  "version": 4,
+  "name": "greenovercast.zip",
+  "items": [
+    "GreenOvercast.sh",
+    "greenovercast"
+  ],
+  "items_opt": [],
+  "attr": {
+    "title": "GreenOvercast",
+    "porter": [
+      "Producdevity"
+    ],
+    "desc": "An unofficial native Xbox Cloud Gaming client with a searchable, controller-first library for Linux handhelds.",
+    "desc_md": null,
+    "inst": "Requires an Xbox Game Pass plan that includes cloud gaming and internet access. First launch uses Microsoft's device-code sign-in.",
+    "inst_md": "Requires an Xbox Game Pass plan that includes cloud gaming and internet access. First launch uses Microsoft's device-code sign-in.",
+    "genres": [
+      "other"
+    ],
+    "image": null,
+    "rtr": false,
+    "exp": true,
+    "runtime": [],
+    "store": [],
+    "availability": "paid",
+    "reqs": [
+      "!lowres"
+    ],
+    "arch": [
+      "aarch64"
+    ],
+    "min_glibc": "2.38"
+  }
+}

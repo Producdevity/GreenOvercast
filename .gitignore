@@ -1,0 +1,13 @@
+# Toolchain (fetched by tools/bootstrap.sh)
+.tools/
+
+# Zig
+.zig-cache/
+zig-out/
+
+artifacts/
+evidence/
+.local/
+
+# noise
+.DS_Store

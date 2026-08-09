@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./GreenOvercast.sh</path>
+    <name>GreenOvercast</name>
+    <desc>A native Xbox Cloud Gaming client with a searchable, controller-first library for Linux handhelds.</desc>
+    <releasedate>20260726T000000</releasedate>
+    <developer>GreenOvercast</developer>
+    <publisher>GreenOvercast</publisher>
+    <genre>Other</genre>
+    <players>1</players>
+    <image>./greenovercast/screenshot.png</image>
+  </game>
+</gameList>

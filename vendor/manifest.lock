@@ -1,0 +1,60 @@
+# Third-party dependency manifest
+#
+# Every dependency records its source, license, build role, and current status.
+# "pinned" means the repository or bootstrap process verifies an exact input.
+# The current development build is not hermetic: libdatachannel source and
+# target system libraries are supplied to the build. Hermetic release inputs
+# remain a pre-publish gate.
+
+[toolchain.zig]
+version = "0.14.1"
+url = "https://ziglang.org/download/0.14.1/zig-aarch64-macos-0.14.1.tar.xz"
+sha256 = "39f3dc5e79c22088ce878edc821dedb4ca5a1cd9f5ef915e9b3cc3053e8faefa"
+license = "MIT"
+status = "pinned (host bootstrap via tools/bootstrap.sh; other host platforms resolved from ziglang.org index at fetch time)"
+
+[dep.cedarx]
+source = "https://github.com/allwinner-zh/media-codec"
+commit = "a912bbe300d522e199001bd903bab22e54eff37b"
+license = "LGPLv2.1-or-later (top-level license and source headers)"
+linkage = "dynamic (private .so in app lib dir; replaceable per LGPLv2.1 §6)"
+build = "source-built H.264 decoder plus project-owned H616 /dev/cedar_dev and ION adapter; tools/build-cedarx.sh"
+status = "1280x720 H.264 hardware decode live-cloud proven through Ports on muOS and Knulli"
+
+[dep.libdatachannel]
+version = "v0.24.3"
+commit = "c6696d157b5612df2a741d9a03b192b47ab6cefb"
+source = "https://github.com/paullouisageneau/libdatachannel"
+license = "MPL-2.0"
+build = "Release static archives; OpenSSL 3; bundled libjuice, usrsctp, libsrtp; NO_WEBSOCKET; media on; Xbox RTCP patch at vendor/patches/libdatachannel-0.24.3-xbox-pli.patch"
+status = "exact commit enforced by tools/build-release.sh and live-proven on muOS and Knulli; source vendoring remains pre-publish work"
+
+[dep.libopus]
+source = "https://github.com/xiph/opus"
+license = "BSD-3-Clause"
+linkage = "dynamic target system library"
+status = "48 kHz stereo decode and SDL audio live-proven through Ports on muOS and Knulli"
+
+[dep.libcurl]
+source = "https://github.com/curl/curl"
+license = "curl (MIT-style)"
+linkage = "dynamic target system library with OpenSSL 3"
+status = "TLS and Xbox service requests live-proven through Ports on muOS and Knulli"
+
+[dep.ffmpeg]
+source = "https://ffmpeg.org/"
+license = "LGPLv2.1-or-later for the libraries used; target build configuration must be audited pre-publish"
+linkage = "dynamic target libavcodec, libavutil, libswscale"
+status = "software H.264 decode and RGB24 conversion live-proven on muOS; Knulli ABI load proven, live fallback fault injection pending"
+
+[dep.sdl2]
+source = "firmware-provided SDL2"
+license = "Zlib"
+linkage = "dynamic target system library"
+status = "accelerated Ports presentation and controller input live-proven with SDL2 2.28.5 (muOS) and 2.32.8 (Knulli)"
+
+[dep.openssl]
+source = "https://www.openssl.org/"
+license = "Apache-2.0"
+linkage = "dynamic target system library"
+status = "TLS, WebRTC, and ChaCha20-Poly1305 credential envelope live-proven on muOS and Knulli"
