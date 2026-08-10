@@ -48,6 +48,9 @@ support 16:9.
 | RG35XX-H | muOS 2508.4          | Tested |
 | RG40XX-H | Knulli (Batocera 42) | Tested |
 
+Hardware decoding currently only works on H700 devices. Other devices fall
+back to software decoding, which is too slow for normal gameplay.
+
 The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
 supported.
 
