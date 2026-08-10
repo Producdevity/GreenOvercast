@@ -33,7 +33,6 @@ const Auth = struct {
     passport_token: [8192]u8 = [_]u8{0} ** 8192,
     token_path: [512]u8 = [_]u8{0} ** 512,
     token_key_path: [512]u8 = [_]u8{0} ** 512,
-    legacy_token_path: [512]u8 = [_]u8{0} ** 512,
 };
 
 fn cString(buffer: []const u8) []const u8 {
@@ -151,14 +150,6 @@ fn debug(comptime format: []const u8, args: anytype) void {
     if (std.posix.getenv("GREENOVERCAST_DEBUG") != null) std.debug.print(format, args);
 }
 
-fn deleteIfPresent(path: []const u8) !void {
-    if (path.len == 0) return;
-    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
-}
-
 fn saveRefreshToken(auth: *Auth) !void {
     if (c.go_token_store_save(
         @ptrCast(&auth.token_path),
@@ -174,24 +165,8 @@ fn loadCredentials(auth: *Auth) !bool {
         @ptrCast(&auth.refresh_token),
         auth.refresh_token.len,
     );
-    if (result == 1) {
-        try deleteIfPresent(cString(&auth.legacy_token_path));
-        return true;
-    }
     if (result < 0) return error.TokenLoadFailed;
-
-    const legacy_path = cString(&auth.legacy_token_path);
-    if (legacy_path.len == 0) return false;
-    var legacy: [16384]u8 = undefined;
-    const data = readSmallFile(legacy_path, &legacy) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => return err,
-    };
-    _ = try jsonString(data, "refresh_token", &auth.refresh_token);
-    try saveRefreshToken(auth);
-    try deleteIfPresent(legacy_path);
-    debug("Migrated credentials to encrypted storage\n", .{});
-    return true;
+    return result == 1;
 }
 
 fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
@@ -485,16 +460,11 @@ pub export fn go_xbox_auth_create() ?*Auth {
         go_xbox_auth_destroy(auth);
         return null;
     };
-    const legacy_path = std.posix.getenv("GREENOVERCAST_LEGACY_TOKEN_FILE");
     copyString(&auth.token_path, token_path) catch {
         go_xbox_auth_destroy(auth);
         return null;
     };
     copyString(&auth.token_key_path, token_key_path) catch {
-        go_xbox_auth_destroy(auth);
-        return null;
-    };
-    if (legacy_path) |path| copyString(&auth.legacy_token_path, path) catch {
         go_xbox_auth_destroy(auth);
         return null;
     };

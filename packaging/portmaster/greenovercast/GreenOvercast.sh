@@ -40,7 +40,6 @@ chmod 700 "$credential_dir" || fail "Unable to protect GreenOvercast's private s
 
 credential_file="$credential_dir/tokens.bin"
 credential_key_file="$credential_dir/tokens.key"
-legacy_credential_file="$credential_dir/tokens.json"
 video_bootstrap_file="$credential_dir/h264-parameter-sets.bin"
 catalog_file="$credential_dir/catalog.tsv"
 log_file="$credential_dir/greenovercast.log"
@@ -49,13 +48,12 @@ log_file="$credential_dir/greenovercast.log"
 chmod 600 "$log_file"
 exec > >(tee "$log_file") 2>&1
 
-for private_file in "$credential_file" "$credential_key_file" "$legacy_credential_file" "$catalog_file"; do
+for private_file in "$credential_file" "$credential_key_file" "$catalog_file"; do
   [ ! -e "$private_file" ] || chmod 600 "$private_file"
 done
 
 export GREENOVERCAST_TOKEN_FILE="$credential_file"
 export GREENOVERCAST_TOKEN_KEY_FILE="$credential_key_file"
-export GREENOVERCAST_LEGACY_TOKEN_FILE="$legacy_credential_file"
 export GREENOVERCAST_H264_BOOTSTRAP_FILE="$video_bootstrap_file"
 export GREENOVERCAST_CATALOG_FILE="$catalog_file"
 export GREENOVERCAST_CEDAR_LIBRARY="$GAMEDIR/libgreenovercast-cedar.so"
