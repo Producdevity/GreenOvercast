@@ -8,6 +8,9 @@ PORTMASTER_NEW=${PORTMASTER_NEW:-${2:-}}
 SOURCE="$ROOT/packaging/portmaster/greenovercast"
 BINARY="$ROOT/zig-out/bin/webrtc_stream"
 CEDAR="$ROOT/zig-out/bin/libgreenovercast-cedar.so"
+AVCODEC="$ROOT/zig-out/bin/libavcodec.so.58"
+AVUTIL="$ROOT/zig-out/bin/libavutil.so.56"
+SWSCALE="$ROOT/zig-out/bin/libswscale.so.5"
 
 case "$OUTPUT" in
 /*) ;;
@@ -22,6 +25,12 @@ esac
   echo "missing Cedar library: $CEDAR" >&2
   exit 1
 }
+for private_library in "$AVCODEC" "$AVUTIL" "$SWSCALE"; do
+  [ -f "$private_library" ] || {
+    echo "missing private library: $private_library" >&2
+    exit 1
+  }
+done
 [ -n "$PORTMASTER_NEW" ] || {
   echo "set PORTMASTER_NEW to a current PortMaster-New checkout" >&2
   exit 1
@@ -45,8 +54,14 @@ cp "$PORTMASTER_NEW/SOURCE_SETUP.txt" "$checker/SOURCE_SETUP.txt"
 cp -R "$SOURCE" "$port"
 cp "$BINARY" "$port/greenovercast/webrtc_stream.aarch64"
 cp "$CEDAR" "$port/greenovercast/libgreenovercast-cedar.so"
+cp "$AVCODEC" "$port/greenovercast/libavcodec.so.58"
+cp "$AVUTIL" "$port/greenovercast/libavutil.so.56"
+cp "$SWSCALE" "$port/greenovercast/libswscale.so.5"
 chmod 644 "$port/GreenOvercast.sh" "$port/greenovercast/webrtc_stream.aarch64" \
-  "$port/greenovercast/libgreenovercast-cedar.so"
+  "$port/greenovercast/libgreenovercast-cedar.so" \
+  "$port/greenovercast/libavcodec.so.58" \
+  "$port/greenovercast/libavutil.so.56" \
+  "$port/greenovercast/libswscale.so.5"
 : >"$checker/.github_check"
 
 (
@@ -77,6 +92,9 @@ required = {
     "greenovercast/screenshot.png",
     "greenovercast/webrtc_stream.aarch64",
     "greenovercast/libgreenovercast-cedar.so",
+    "greenovercast/libavcodec.so.58",
+    "greenovercast/libavutil.so.56",
+    "greenovercast/libswscale.so.5",
 }
 missing = sorted(required.difference(names))
 bad_root = sorted(name for name in names if "/" not in name and name != "GreenOvercast.sh")

@@ -1,0 +1,11 @@
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -6143,7 +6143,7 @@ check_struct "sys/stat.h" "struct stat" st_mtim.tv_nsec -D_BSD_SOURCE
+ check_func  strerror_r
+ check_func  sysconf
+-check_func  sysctl
++check_func_headers sys/sysctl.h sysctl
+ check_func  usleep
+ 
+ check_func_headers conio.h kbhit

@@ -3,19 +3,14 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-LIBDATACHANNEL_SOURCE=${1:?usage: build-release.sh <libdatachannel-source> <target-lib-dir> <openssl-include-dir> [output]}
-TARGET_LIB_DIR=${2:?usage: build-release.sh <libdatachannel-source> <target-lib-dir> <openssl-include-dir> [output]}
-OPENSSL_INCLUDE_DIR=${3:?usage: build-release.sh <libdatachannel-source> <target-lib-dir> <openssl-include-dir> [output]}
-OUTPUT=${4:-$ROOT/zig-out/bin/webrtc_stream}
+OUTPUT=${1:-$ROOT/zig-out/bin/webrtc_stream}
 EXPECTED_COMMIT=c6696d157b5612df2a741d9a03b192b47ab6cefb
+LIBDATACHANNEL_SOURCE="$ROOT/vendor/libdatachannel"
 LIBDATACHANNEL_PATCH="$ROOT/vendor/patches/libdatachannel-0.24.3-xbox-pli.patch"
 ZIG="$ROOT/.tools/zig-0.14.1/zig"
 BUILD_DIR="$ROOT/.tools/build/libdatachannel-aarch64-release"
-TOOLCHAIN="$BUILD_DIR/zig-aarch64-toolchain.cmake"
-CC_WRAPPER="$BUILD_DIR/aarch64-cc"
-CXX_WRAPPER="$BUILD_DIR/aarch64-c++"
-AR_WRAPPER="$BUILD_DIR/aarch64-ar"
-RANLIB_WRAPPER="$BUILD_DIR/aarch64-ranlib"
+DEPENDENCY_PREFIX="$ROOT/.tools/deps/aarch64-linux-gnu"
+TOOLCHAIN="$ROOT/.tools/cross/aarch64-linux-gnu/toolchain.cmake"
 ZIG_CACHE_DIR="$ROOT/.tools/cache/zig"
 OBJECT_DIR="$ROOT/.tools/build/release-aarch64"
 
@@ -24,20 +19,11 @@ OBJECT_DIR="$ROOT/.tools/build/release-aarch64"
   exit 1
 }
 [ -f "$LIBDATACHANNEL_SOURCE/CMakeLists.txt" ] || {
-  echo "invalid libdatachannel source directory" >&2
+  echo "missing libdatachannel submodule; run tools/bootstrap.sh" >&2
   exit 1
 }
-for library in libssl.so libcrypto.so libcurl.so libSDL2.so libopus.so \
-  libavcodec.so libavutil.so libswscale.so; do
-  [ -f "$TARGET_LIB_DIR/$library" ] || {
-    echo "missing target library: $TARGET_LIB_DIR/$library" >&2
-    exit 1
-  }
-done
-[ -f "$OPENSSL_INCLUDE_DIR/openssl/ssl.h" ] || {
-  echo "OpenSSL headers not found" >&2
-  exit 1
-}
+
+"$ROOT/tools/build-dependencies.sh"
 
 actual_commit=$(git -C "$LIBDATACHANNEL_SOURCE" rev-parse HEAD)
 [ "$actual_commit" = "$EXPECTED_COMMIT" ] || {
@@ -61,33 +47,6 @@ trap restore_libdatachannel EXIT HUP INT TERM
 
 mkdir -p "$BUILD_DIR" "$OBJECT_DIR" "$ZIG_CACHE_DIR" "$(dirname -- "$OUTPUT")"
 "$ROOT/tools/build-cedarx.sh" "$(dirname -- "$OUTPUT")/libgreenovercast-cedar.so"
-for compiler in "$CC_WRAPPER" "$CXX_WRAPPER"; do
-  driver=cc
-  [ "$compiler" = "$CXX_WRAPPER" ] && driver=c++
-  {
-    printf '%s\n' '#!/bin/sh'
-    printf 'exec "%s" %s -target aarch64-linux-gnu.2.38 "$@"\n' "$ZIG" "$driver"
-  } >"$compiler"
-done
-{
-  printf '%s\n' '#!/bin/sh'
-  printf 'exec "%s" ar "$@"\n' "$ZIG"
-} >"$AR_WRAPPER"
-{
-  printf '%s\n' '#!/bin/sh'
-  printf 'exec "%s" ranlib "$@"\n' "$ZIG"
-} >"$RANLIB_WRAPPER"
-chmod +x "$CC_WRAPPER" "$CXX_WRAPPER" "$AR_WRAPPER" "$RANLIB_WRAPPER"
-
-{
-  printf '%s\n' 'set(CMAKE_SYSTEM_NAME Linux)'
-  printf '%s\n' 'set(CMAKE_SYSTEM_PROCESSOR aarch64)'
-  printf 'set(CMAKE_C_COMPILER "%s")\n' "$CC_WRAPPER"
-  printf 'set(CMAKE_CXX_COMPILER "%s")\n' "$CXX_WRAPPER"
-  printf 'set(CMAKE_AR "%s")\n' "$AR_WRAPPER"
-  printf 'set(CMAKE_RANLIB "%s")\n' "$RANLIB_WRAPPER"
-  printf '%s\n' 'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)'
-} >"$TOOLCHAIN"
 
 export ZIG_GLOBAL_CACHE_DIR="$ZIG_CACHE_DIR"
 cmake_fresh=
@@ -101,8 +60,8 @@ fi
 cmake $cmake_fresh -S "$LIBDATACHANNEL_SOURCE" -B "$BUILD_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_FLAGS_RELEASE='-O3 -DNDEBUG' \
-  -DCMAKE_CXX_FLAGS_RELEASE='-O3 -DNDEBUG' \
+  -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=$ROOT=." \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=$ROOT=." \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_SHARED_DEPS_LIBS=OFF \
   -DNO_TESTS=ON \
@@ -116,20 +75,20 @@ cmake $cmake_fresh -S "$LIBDATACHANNEL_SOURCE" -B "$BUILD_DIR" \
   -DUSE_SYSTEM_PLOG=OFF \
   -DUSE_SYSTEM_SRTP=OFF \
   -DUSE_SYSTEM_USRSCTP=OFF \
-  -DOPENSSL_INCLUDE_DIR="$OPENSSL_INCLUDE_DIR" \
-  -DOPENSSL_SSL_LIBRARY="$TARGET_LIB_DIR/libssl.so" \
-  -DOPENSSL_CRYPTO_LIBRARY="$TARGET_LIB_DIR/libcrypto.so"
+  -DOPENSSL_INCLUDE_DIR="$DEPENDENCY_PREFIX/include" \
+  -DOPENSSL_SSL_LIBRARY="$DEPENDENCY_PREFIX/lib/libssl.a" \
+  -DOPENSSL_CRYPTO_LIBRARY="$DEPENDENCY_PREFIX/lib/libcrypto.a"
 cmake --build "$BUILD_DIR" --parallel
 
 compile_adapter() {
   source=$1
   object=$2
   "$ZIG" c++ -target aarch64-linux-gnu.2.38 -Werror -Wall -Wextra -O2 \
-    -I"$ROOT/vendor/headers" -I"$ROOT/src/media/audio" \
+    -ffile-prefix-map="$ROOT"=. \
+    -I"$DEPENDENCY_PREFIX/include" -I"$ROOT/vendor/headers" -I"$ROOT/src/media/audio" \
     -I"$ROOT/src/media/video" -I"$ROOT/src/auth" -I"$ROOT/src/input" -I"$ROOT/src/ui" \
     -I"$ROOT/src/media/rtp" -I"$ROOT/src/catalog" -I"$ROOT/src/net" \
     -I"$ROOT/src/session" -I"$ROOT/src/platform" \
-    -I"$OPENSSL_INCLUDE_DIR" \
     -c "$source" -o "$object"
 }
 
@@ -195,16 +154,27 @@ compile_adapter "$ROOT/src/platform/sdl_platform.c" "$OBJECT_DIR/sdl_platform.o"
   "$OBJECT_DIR/json_reader.o" \
   "$OBJECT_DIR/json_writer.o" "$OBJECT_DIR/form_writer.o" \
   -target aarch64-linux-gnu.2.38 -O ReleaseSafe \
-  -I"$ROOT/vendor/headers" -I"$ROOT/src/media/audio" \
+  -I"$DEPENDENCY_PREFIX/include" -I"$ROOT/vendor/headers" -I"$ROOT/src/media/audio" \
   -I"$ROOT/src/media/video" -I"$ROOT/src/auth" -I"$ROOT/src/input" \
   -I"$ROOT/src/ui" -I"$ROOT/src/media/rtp" -I"$ROOT/src/catalog" \
   -I"$ROOT/src/net" -I"$ROOT/src/session" -I"$ROOT/src/platform" \
-  -L"$TARGET_LIB_DIR" -rpath '$ORIGIN' -fstrip -femit-bin="$OUTPUT" -lc -lc++ \
+  -L"$DEPENDENCY_PREFIX/lib" -rpath "\$ORIGIN" -fstrip -femit-bin="$OUTPUT" -lc -lc++ \
   "$BUILD_DIR/libdatachannel.a" \
   "$BUILD_DIR/deps/libjuice/libjuice.a" \
   "$BUILD_DIR/deps/usrsctp/usrsctplib/libusrsctp.a" \
   "$BUILD_DIR/deps/libsrtp/libsrtp2.a" \
-  -lcurl -lssl -lcrypto -lpthread -ldl -lSDL2 -lopus -lavcodec -lavutil -lswscale
+  "$DEPENDENCY_PREFIX/lib/libcurl.a" \
+  "$DEPENDENCY_PREFIX/lib/libssl.a" \
+  "$DEPENDENCY_PREFIX/lib/libcrypto.a" \
+  "$DEPENDENCY_PREFIX/lib/libopus.a" \
+  -lpthread -ldl -lSDL2 -lavcodec -lavutil -lswscale
 rm -f "$OUTPUT.o"
+
+"$ROOT/tools/zig.sh" objcopy --strip-all \
+  "$DEPENDENCY_PREFIX/lib/libavcodec.so.58" "$(dirname -- "$OUTPUT")/libavcodec.so.58"
+"$ROOT/tools/zig.sh" objcopy --strip-all \
+  "$DEPENDENCY_PREFIX/lib/libavutil.so.56" "$(dirname -- "$OUTPUT")/libavutil.so.56"
+"$ROOT/tools/zig.sh" objcopy --strip-all \
+  "$DEPENDENCY_PREFIX/lib/libswscale.so.5" "$(dirname -- "$OUTPUT")/libswscale.so.5"
 
 printf 'built: %s\n' "$OUTPUT"

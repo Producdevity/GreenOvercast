@@ -2,9 +2,8 @@
 #
 # Every dependency records its source, license, build role, and current status.
 # "pinned" means the repository or bootstrap process verifies an exact input.
-# The current development build is not hermetic: libdatachannel source and
-# target system libraries are supplied to the build. Hermetic release inputs
-# remain a pre-publish gate.
+# Source archives are verified by tools/build-dependencies.sh. SDL2 remains a
+# firmware dependency, as required by PortMaster.
 
 [toolchain.zig]
 version = "0.14.1"
@@ -27,34 +26,45 @@ commit = "c6696d157b5612df2a741d9a03b192b47ab6cefb"
 source = "https://github.com/paullouisageneau/libdatachannel"
 license = "MPL-2.0"
 build = "Release static archives; OpenSSL 3; bundled libjuice, usrsctp, libsrtp; NO_WEBSOCKET; media on; Xbox RTCP patch at vendor/patches/libdatachannel-0.24.3-xbox-pli.patch"
-status = "exact commit enforced by tools/build-release.sh and live-proven on muOS and Knulli; source vendoring remains pre-publish work"
+status = "git submodule pinned to the exact commit; nested dependencies are pinned by that checkout"
 
 [dep.libopus]
-source = "https://github.com/xiph/opus"
+version = "1.6.1"
+source = "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz"
+sha256 = "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
 license = "BSD-3-Clause"
-linkage = "dynamic target system library"
-status = "48 kHz stereo decode and SDL audio live-proven through Ports on muOS and Knulli"
+linkage = "static"
+status = "source-built by tools/build-dependencies.sh"
 
 [dep.libcurl]
-source = "https://github.com/curl/curl"
+version = "8.20.0"
+source = "https://curl.se/download/curl-8.20.0.tar.xz"
+sha256 = "63fe2dc148ba0ceae89922ef838f7e5c946272c2e78b7c59fab4b79d3ce2b896"
 license = "curl (MIT-style)"
-linkage = "dynamic target system library with OpenSSL 3"
-status = "TLS and Xbox service requests live-proven through Ports on muOS and Knulli"
+linkage = "static; HTTP and HTTPS only"
+status = "source-built by tools/build-dependencies.sh"
 
 [dep.ffmpeg]
-source = "https://ffmpeg.org/"
-license = "LGPLv2.1-or-later for the libraries used; target build configuration must be audited pre-publish"
-linkage = "dynamic target libavcodec, libavutil, libswscale"
-status = "software H.264 decode and RGB24 conversion live-proven on muOS; Knulli ABI load proven, live fallback fault injection pending"
+version = "4.4.8"
+source = "https://ffmpeg.org/releases/ffmpeg-4.4.8.tar.xz"
+sha256 = "c73848c4ae283d9eaee7be3b276affbc3543380483555500d0dd2c9b7e1c39c3"
+license = "LGPLv2.1-or-later"
+linkage = "dynamic private libavcodec, libavutil, and libswscale"
+build = "H.264 decoder and parser only; no programs, network support, external libraries, GPL, or nonfree components"
+status = "source-built by tools/build-dependencies.sh and shipped with the port"
 
 [dep.sdl2]
-source = "firmware-provided SDL2"
+version = "2.28.5 link-time ABI"
+source = "https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz"
+sha256 = "332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4"
 license = "Zlib"
-linkage = "dynamic target system library"
-status = "accelerated Ports presentation and controller input live-proven with SDL2 2.28.5 (muOS) and 2.32.8 (Knulli)"
+linkage = "dynamic firmware library; the source build is used only for headers and link-time ABI"
+status = "not bundled"
 
 [dep.openssl]
-source = "https://www.openssl.org/"
+version = "3.5.7 LTS"
+source = "https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz"
+sha256 = "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8"
 license = "Apache-2.0"
-linkage = "dynamic target system library"
-status = "TLS, WebRTC, and ChaCha20-Poly1305 credential envelope live-proven on muOS and Knulli"
+linkage = "static"
+status = "source-built by tools/build-dependencies.sh"

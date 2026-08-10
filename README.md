@@ -36,7 +36,7 @@ GreenOvercast is experimental and has only been tested on the devices below.
 | L3 + R3            | Xbox Guide                                  |
 | Select + Start     | Exit GreenOvercast after holding one second |
 
-Controls in-game is just your standard Xbox controller layout.
+In-game controls use the standard Xbox controller layout.
 
 The aspect-ratio setting applies to the next game you start. Most games only
 support 16:9.
@@ -56,7 +56,8 @@ supported.
 
 ## Build
 
-You need a Linux or macOS host with `cmake`, `curl`, `git`, and `python3`.
+You need a Linux or macOS host with `cmake`, `curl`, `git`, `make`, `patch`,
+`perl`, and `python3`.
 
 ```sh
 tools/bootstrap.sh           # fetch Zig 0.14.1
@@ -66,23 +67,10 @@ tools/zig.sh build test      # host unit tests
 tools/zig.sh build fmt-check # format check
 ```
 
-The full build uses libdatachannel v0.24.3 at commit
-`c6696d157b5612df2a741d9a03b192b47ab6cefb` with its submodules:
+Build the release and PortMaster package with:
 
 ```sh
-git clone --depth 1 --branch v0.24.3 --recurse-submodules --shallow-submodules \
-  https://github.com/paullouisageneau/libdatachannel.git /tmp/libdatachannel-v0.24.3
-```
-
-The link step also needs ARM64 copies of these libraries from the target CFW:
-`libssl.so`, `libcrypto.so`, `libcurl.so`, `libSDL2.so`, `libopus.so`,
-`libavcodec.so`, `libavutil.so`, and `libswscale.so`.
-Keep them in a temporary directory outside the repository. Pass that directory,
-the libdatachannel checkout, and compatible OpenSSL 3 headers to the release
-builder:
-
-```sh
-tools/build-release.sh <libdatachannel-source> <target-lib-dir> <openssl-include-dir>
+tools/build-release.sh
 PORTMASTER_NEW=/path/to/PortMaster-New tools/package-portmaster.sh
 ```
 

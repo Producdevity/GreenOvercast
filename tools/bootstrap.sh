@@ -7,6 +7,8 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TOOLS="$ROOT/.tools"
 INDEX_URL="https://ziglang.org/download/index.json"
 
+git -C "$ROOT" submodule update --init --recursive
+
 uname_s=$(uname -s)
 uname_m=$(uname -m)
 case "$uname_s-$uname_m" in
