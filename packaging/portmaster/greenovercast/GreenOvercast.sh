@@ -65,7 +65,7 @@ if [ -S /var/run/pipewire-0 ]; then
   export PIPEWIRE_RUNTIME_DIR="${PIPEWIRE_RUNTIME_DIR:-/var/run}"
 fi
 
-unset SDL_HQ_SCALER SDL_ROTATION SDL_BLITTER_DISABLED SDL_ASSERT
+unset SDL_HQ_SCALER SDL_ROTATION SDL_BLITTER_DISABLED
 
 $ESUDO chmod +x "$GAMEDIR/webrtc_stream.aarch64"
 pm_platform_helper "$GAMEDIR/webrtc_stream.aarch64"
