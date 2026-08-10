@@ -28,7 +28,7 @@ OBJECT_DIR="$ROOT/.tools/build/release-aarch64"
   exit 1
 }
 for library in libssl.so libcrypto.so libcurl.so libSDL2.so libopus.so \
-  libavcodec.so libavutil.so libswresample.so libswscale.so; do
+  libavcodec.so libavutil.so libswscale.so; do
   [ -f "$TARGET_LIB_DIR/$library" ] || {
     echo "missing target library: $TARGET_LIB_DIR/$library" >&2
     exit 1
@@ -204,7 +204,7 @@ compile_adapter "$ROOT/src/platform/sdl_platform.c" "$OBJECT_DIR/sdl_platform.o"
   "$BUILD_DIR/deps/libjuice/libjuice.a" \
   "$BUILD_DIR/deps/usrsctp/usrsctplib/libusrsctp.a" \
   "$BUILD_DIR/deps/libsrtp/libsrtp2.a" \
-  -lcurl -lssl -lcrypto -lpthread -ldl -lSDL2 -lopus -lavcodec -lavutil -lswresample -lswscale
+  -lcurl -lssl -lcrypto -lpthread -ldl -lSDL2 -lopus -lavcodec -lavutil -lswscale
 rm -f "$OUTPUT.o"
 
 printf 'built: %s\n' "$OUTPUT"

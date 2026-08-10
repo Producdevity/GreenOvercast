@@ -76,7 +76,7 @@ git clone --depth 1 --branch v0.24.3 --recurse-submodules --shallow-submodules \
 
 The link step also needs ARM64 copies of these libraries from the target CFW:
 `libssl.so`, `libcrypto.so`, `libcurl.so`, `libSDL2.so`, `libopus.so`,
-`libavcodec.so`, `libavutil.so`, `libswresample.so`, and `libswscale.so`.
+`libavcodec.so`, `libavutil.so`, and `libswscale.so`.
 Keep them in a temporary directory outside the repository. Pass that directory,
 the libdatachannel checkout, and compatible OpenSSL 3 headers to the release
 builder:
