@@ -11,8 +11,12 @@ Requires an [Xbox Game Pass plan](https://www.xbox.com/cloud-gaming) that includ
 
 ## Install
 
-Install `greenovercast.zip` through PortMaster, then launch GreenOvercast from
-the Ports section of the device frontend.
+Copy `greenovercast.zip` to PortMaster's autoinstall folder, then open
+PortMaster to install it. The folder location for each firmware is listed in
+the [PortMaster FAQ](https://portmaster.games/faq.html#do-i-have-to-use-portmaster-to-install-ports).
+
+When the installation finishes, return to the device frontend and launch
+GreenOvercast from Ports.
 
 The first launch shows a Microsoft device code. Open
 [microsoft.com/link](https://www.microsoft.com/link) on another device and enter
