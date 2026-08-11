@@ -1,4 +1,7 @@
+
 # GreenOvercast
+
+<img width="640" height="480" alt="screenshot" src="https://github.com/user-attachments/assets/4ec93eeb-8795-44e5-9ba8-c6065adf4660" />
 
 GreenOvercast is a native Xbox Cloud Gaming client for small ARM64 Linux
 handhelds. It streams at 720p and uses the H700 video decoder.
