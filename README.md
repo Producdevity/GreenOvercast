@@ -1,4 +1,3 @@
-
 # GreenOvercast
 
 <img width="640" height="480" alt="screenshot" src="https://github.com/user-attachments/assets/4ec93eeb-8795-44e5-9ba8-c6065adf4660" />
@@ -80,6 +79,9 @@ Build the release and PortMaster package with:
 tools/build-release.sh
 PORTMASTER_NEW=/path/to/PortMaster-New tools/package-portmaster.sh
 ```
+
+I would recommend using a sparse checkout of [PortMaster-New](https://github.com/PortsMaster/PortMaster-New) because
+she's a big one. [Here is a great guide made by JeodC to help you with that](https://gist.github.com/JeodC/7a51211ad94ad6084d14042d80a62549).
 
 `package-portmaster.sh` runs the current PortMaster-New checks and archive
 builder. To queue the finished archive for PortMaster's supported autoinstall
