@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "mpp_loader.h"
 
 #include <errno.h>
@@ -6,7 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <time.h>
+
+enum { MPP_DRAIN_TIMEOUT_MS = 2000 };
 
 typedef struct {
     int expected_width;
@@ -15,6 +19,23 @@ typedef struct {
     int frames;
     uint64_t checksum;
 } TestState;
+
+static int monotonic_milliseconds(int64_t* milliseconds) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return -1;
+    *milliseconds = (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    return 0;
+}
+
+static int wait_one_millisecond(void) {
+    struct timespec remaining = {.tv_sec = 0, .tv_nsec = 1000000};
+    while (nanosleep(&remaining, &remaining) != 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+    return 0;
+}
 
 static uint64_t checksum_bytes(uint64_t value, const uint8_t* data, size_t length) {
     for (size_t index = 0; index < length; ++index) {
@@ -72,24 +93,29 @@ static int submit_access_unit(GoMppLibrary* library, const uint8_t* data, size_t
         }
         if (drain_frames(library, state) != 0)
             return -1;
-        usleep(1000);
+        if (wait_one_millisecond() != 0)
+            return -1;
     }
     fprintf(stderr, "MPP input remained backpressured\n");
     return -1;
 }
 
 static int drain_until_minimum(GoMppLibrary* library, TestState* state, int minimum_frames) {
-    int idle_passes = 0;
-    while (state->frames < minimum_frames && idle_passes < 10) {
-        int previous_frames = state->frames;
+    int64_t now;
+    if (monotonic_milliseconds(&now) != 0)
+        return -1;
+    int64_t deadline = now + MPP_DRAIN_TIMEOUT_MS;
+    while (state->frames < minimum_frames) {
         if (drain_frames(library, state) != 0)
             return -1;
-        if (state->frames == previous_frames) {
-            idle_passes++;
-            usleep(1000);
-        } else {
-            idle_passes = 0;
-        }
+        if (state->frames >= minimum_frames)
+            break;
+        if (monotonic_milliseconds(&now) != 0)
+            return -1;
+        if (now >= deadline)
+            break;
+        if (wait_one_millisecond() != 0)
+            return -1;
     }
     return 0;
 }
