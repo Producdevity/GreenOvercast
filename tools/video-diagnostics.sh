@@ -3,7 +3,7 @@ set -u
 
 app_dir=${1:-.}
 mpp_plugin=${GREENOVERCAST_MPP_LIBRARY:-$app_dir/libgreenovercast-mpp.so}
-if [ -x "$app_dir/rockchip/greenovercast-mpp-probe.aarch64" ]; then
+if [ -f "$app_dir/rockchip/greenovercast-mpp-probe.aarch64" ]; then
   mpp_probe="$app_dir/rockchip/greenovercast-mpp-probe.aarch64"
   private_mpp_dir="$app_dir/rockchip"
 else
@@ -37,6 +37,10 @@ file "$mpp_plugin" 2>/dev/null || true
 if command -v ldd >/dev/null 2>&1; then
   printf 'MPP dependencies using firmware libraries:\n'
   LD_LIBRARY_PATH="$app_dir:${LD_LIBRARY_PATH:-}" ldd "$mpp_plugin" 2>&1
+fi
+if [ -f "$mpp_probe" ] && [ ! -x "$mpp_probe" ]; then
+  printf 'MPP probe: not executable\n'
+  exit 1
 fi
 if [ -x "$mpp_probe" ]; then
   printf 'MPP firmware probe:\n'

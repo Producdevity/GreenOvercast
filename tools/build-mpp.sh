@@ -40,7 +40,7 @@ if [ -n "${MPP_LINK_LIBRARY:-}" ]; then
     exit 1
   }
   mpp_link=$MPP_LINK_LIBRARY
-  bundled_mpp=0
+  mpp_runtime=$MPP_LINK_LIBRARY
 else
   "$ROOT/tools/build-dependencies.sh" --toolchain-only
   # MPP invokes CMAKE_LINKER directly to merge target object files with `-r`.
@@ -53,10 +53,10 @@ else
   cmake --build "$BUILD_DIR" --target rockchip_mpp --parallel
   mpp_headers="$MPP_SOURCE/inc"
   mpp_link="$BUILD_DIR/mpp/librockchip_mpp.so"
-  "$ZIG_RUN" objcopy --strip-all "$BUILD_DIR/mpp/librockchip_mpp.so.0" \
-    "$OUTPUT_DIR/librockchip_mpp.so.1"
-  bundled_mpp=1
+  mpp_runtime="$BUILD_DIR/mpp/librockchip_mpp.so.0"
 fi
+
+"$ZIG_RUN" objcopy --strip-all "$mpp_runtime" "$OUTPUT_DIR/librockchip_mpp.so.1"
 
 "$ZIG_RUN" cc -target aarch64-linux-gnu.2.38 -O2 -fPIC -fvisibility=hidden -shared -s \
   -ffile-prefix-map="$ROOT"=. -Werror -Wall -Wextra \
@@ -76,9 +76,7 @@ fi
   -ldl -Wl,-rpath,'$ORIGIN' -o "$OUTPUT_DIR/greenovercast-mpp-bridge-test.aarch64"
 
 file "$OUTPUT_DIR/libgreenovercast-mpp.so"
-if [ "$bundled_mpp" -eq 1 ]; then
-  file "$OUTPUT_DIR/librockchip_mpp.so.1"
-fi
+file "$OUTPUT_DIR/librockchip_mpp.so.1"
 printf 'built: %s\n' "$OUTPUT_DIR/libgreenovercast-mpp.so"
 printf 'built: %s\n' "$OUTPUT_DIR/greenovercast-mpp-probe.aarch64"
 printf 'built: %s\n' "$OUTPUT_DIR/greenovercast-mpp-bridge-test.aarch64"

@@ -1,13 +1,10 @@
 #!/bin/sh
 set -eu
 
-case "${1:-}" in
-"" | --toolchain-only) ;;
-*)
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--toolchain-only" ]; }; then
   echo "usage: $0 [--toolchain-only]" >&2
   exit 1
-  ;;
-esac
+fi
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TOOLS="$ROOT/.tools"
