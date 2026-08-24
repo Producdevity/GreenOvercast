@@ -39,8 +39,10 @@ if command -v ldd >/dev/null 2>&1; then
   LD_LIBRARY_PATH="$app_dir:${LD_LIBRARY_PATH:-}" ldd "$mpp_plugin" 2>&1
 fi
 if [ -f "$mpp_probe" ] && [ ! -x "$mpp_probe" ]; then
-  printf 'MPP probe: not executable\n'
-  exit 1
+  if ! chmod +x "$mpp_probe" 2>/dev/null; then
+    printf 'MPP probe: unable to make executable\n'
+    exit 1
+  fi
 fi
 if [ -x "$mpp_probe" ]; then
   printf 'MPP firmware probe:\n'
