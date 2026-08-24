@@ -20,6 +20,15 @@ linkage = "dynamic (private .so in app lib dir; replaceable per LGPLv2.1 §6)"
 build = "source-built H.264 decoder plus project-owned H616 /dev/cedar_dev and ION adapter; tools/build-cedarx.sh"
 status = "1280x720 H.264 hardware decode live-cloud proven through Ports on muOS and Knulli"
 
+[dep.rockchip_mpp]
+version = "1.1.0"
+source = "https://github.com/rockchip-linux/mpp"
+commit = "c08762ebfadeb4e986d2fed993bc7a54862d3ebe"
+license = "Apache-2.0 and MIT"
+linkage = "dynamic optional decoder plugin; firmware MPP preferred when compatible"
+build = "git submodule headers and optional private userspace library; tools/build-mpp.sh"
+status = "live cloud playback proven on ROCKNIX; RK3326 dArkOS 4.4 offline 720p decode and frontend startup proven"
+
 [dep.libdatachannel]
 version = "v0.24.3"
 commit = "c6696d157b5612df2a741d9a03b192b47ab6cefb"

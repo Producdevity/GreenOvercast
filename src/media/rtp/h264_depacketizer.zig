@@ -132,6 +132,13 @@ pub const Depacketizer = struct {
         return offset;
     }
 
+    pub fn restartDecodeEpoch(self: *Depacketizer) void {
+        self.resetAccessUnit();
+        self.access_unit_timestamp = null;
+        self.decode_epoch_ready = false;
+        self.bootstrap_pending = self.have_sps and self.have_pps;
+    }
+
     pub fn feed(
         self: *Depacketizer,
         packet: []const u8,
@@ -196,8 +203,8 @@ pub const Depacketizer = struct {
         self.countNal(nal_type, result);
         if ((nal_type == 7 or nal_type == 8) and
             !self.observeParameterSet(nal_type, nal, result)) return;
-        if ((nal_type == 1 or nal_type == 5) and !self.prependBootstrap(result)) return;
         if (!self.shouldAppend(nal_type, result)) return;
+        if ((nal_type == 1 or nal_type == 5) and !self.prependBootstrap(result)) return;
         if (!self.appendNal(nal)) self.discardAccessUnit(result);
     }
 
@@ -245,9 +252,9 @@ pub const Depacketizer = struct {
         if (is_start) {
             if (self.fragment_state != .idle) self.discardAccessUnit(result);
             self.countNal(nal_type, result);
-            if ((nal_type == 1 or nal_type == 5) and !self.prependBootstrap(result)) {
+            if (!self.shouldAppend(nal_type, result)) {
                 self.fragment_state = .dropping;
-            } else if (!self.shouldAppend(nal_type, result)) {
+            } else if ((nal_type == 1 or nal_type == 5) and !self.prependBootstrap(result)) {
                 self.fragment_state = .dropping;
             } else {
                 const nal_header = (payload[0] & 0x60) | @as(u8, nal_type);
@@ -426,7 +433,7 @@ pub const Depacketizer = struct {
     }
 
     fn discardAccessUnit(self: *Depacketizer, result: *FeedResult) void {
-        self.resetAccessUnit();
+        self.restartDecodeEpoch();
         result.discontinuities += 1;
         result.requires_keyframe = 1;
     }
@@ -489,6 +496,12 @@ pub export fn go_h264_depacketizer_take_bootstrap(
     const written = state.takeBootstrap(destination[0..capacity]) orelse return -1;
     output_length.* = written;
     return if (written > 0) 1 else 0;
+}
+
+pub export fn go_h264_depacketizer_restart_decode_epoch(
+    depacketizer: ?*Depacketizer,
+) void {
+    if (depacketizer) |state| state.restartDecodeEpoch();
 }
 
 pub export fn go_h264_depacketizer_feed(
@@ -697,4 +710,92 @@ test "invalid bootstrap does not replace the active parameter sets" {
     const length = depacketizer.takeBootstrap(&output).?;
 
     try std.testing.expectEqualSlices(u8, &bootstrap, output[0..length]);
+}
+
+test "decode epoch restart preserves parameter sets and waits for IDR" {
+    var depacketizer = Depacketizer.init(102);
+    try std.testing.expect(depacketizer.setBootstrap(&bootstrap));
+    var collector = TestCollector{};
+    const idr = [_]u8{ 0x65, 0xbb };
+    const slice = [_]u8{ 0x61, 0xaa };
+
+    const first_idr = makeRtp(1, 3600, true, &idr);
+    const first_slice = makeRtp(2, 3960, true, &slice);
+    _ = depacketizer.feed(first_idr[0 .. 12 + idr.len], collectAccessUnit, &collector);
+    _ = depacketizer.feed(first_slice[0 .. 12 + slice.len], collectAccessUnit, &collector);
+
+    depacketizer.restartDecodeEpoch();
+
+    const dropped_slice = makeRtp(3, 4320, true, &slice);
+    const dropped = depacketizer.feed(
+        dropped_slice[0 .. 12 + slice.len],
+        collectAccessUnit,
+        &collector,
+    );
+    try std.testing.expectEqual(@as(u32, 1), dropped.requires_keyframe);
+    try std.testing.expectEqual(@as(usize, 2), collector.calls);
+
+    const recovery_idr = makeRtp(4, 4680, true, &idr);
+    const recovered = depacketizer.feed(
+        recovery_idr[0 .. 12 + idr.len],
+        collectAccessUnit,
+        &collector,
+    );
+    try std.testing.expectEqual(@as(u32, 0), recovered.requires_keyframe);
+    try std.testing.expectEqual(@as(usize, 3), collector.calls);
+    try std.testing.expectEqualSlices(u8, &bootstrap, collector.data[0..bootstrap.len]);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 0, 0, 1, 0x65, 0xbb },
+        collector.data[bootstrap.len..collector.data_length],
+    );
+
+    const recovered_slice = makeRtp(5, 5040, true, &slice);
+    _ = depacketizer.feed(
+        recovered_slice[0 .. 12 + slice.len],
+        collectAccessUnit,
+        &collector,
+    );
+    try std.testing.expectEqual(@as(usize, 4), collector.calls);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 0, 0, 1, 0x61, 0xaa },
+        collector.data[0..collector.data_length],
+    );
+}
+
+test "decode epoch restart discards incomplete fragmentation" {
+    var depacketizer = Depacketizer.init(102);
+    try std.testing.expect(depacketizer.setBootstrap(&bootstrap));
+    var collector = TestCollector{};
+    const fragment_start = [_]u8{ 0x7c, 0x85, 0xde, 0xad };
+    const fragment_end = [_]u8{ 0x7c, 0x45, 0xbe, 0xef };
+    const first = makeRtp(1, 3600, false, &fragment_start);
+    const second = makeRtp(2, 3600, true, &fragment_end);
+
+    _ = depacketizer.feed(first[0 .. 12 + fragment_start.len], collectAccessUnit, &collector);
+    depacketizer.restartDecodeEpoch();
+    const result = depacketizer.feed(
+        second[0 .. 12 + fragment_end.len],
+        collectAccessUnit,
+        &collector,
+    );
+
+    try std.testing.expectEqual(@as(u32, 1), result.discontinuities);
+    try std.testing.expectEqual(@as(u32, 1), result.requires_keyframe);
+    try std.testing.expectEqual(@as(usize, 0), collector.calls);
+}
+
+test "decode epoch restart without parameter sets rejects IDR" {
+    var depacketizer = Depacketizer.init(102);
+    var collector = TestCollector{};
+    depacketizer.restartDecodeEpoch();
+    depacketizer.restartDecodeEpoch();
+    const idr = [_]u8{ 0x65, 0xbb };
+    const packet = makeRtp(1, 3600, true, &idr);
+
+    const result = depacketizer.feed(packet[0 .. 12 + idr.len], collectAccessUnit, &collector);
+
+    try std.testing.expectEqual(@as(u32, 1), result.requires_keyframe);
+    try std.testing.expectEqual(@as(usize, 0), collector.calls);
 }

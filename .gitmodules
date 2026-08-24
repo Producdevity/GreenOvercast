@@ -1,3 +1,6 @@
 [submodule "vendor/libdatachannel"]
 	path = vendor/libdatachannel
 	url = https://github.com/paullouisageneau/libdatachannel.git
+[submodule "vendor/mpp"]
+	path = vendor/mpp
+	url = https://github.com/rockchip-linux/mpp.git

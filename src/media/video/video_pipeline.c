@@ -1,7 +1,8 @@
 #include "video_pipeline.h"
 
 #include <errno.h>
-#include <libavcodec/avcodec.h>
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
 #include <libswscale/swscale.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -13,12 +14,14 @@
 #include <unistd.h>
 
 #include "../../util/log.h"
-#include "cedar_loader.h"
 #include "h264_depacketizer.h"
+#include "video_decoder.h"
+#include "video_frame_copy.h"
 
 #define H264_BOOTSTRAP_MAX_SIZE 4104
 #define VIDEO_PACKET_MAX_SIZE 4096
 #define VIDEO_PACKET_QUEUE_CAPACITY 128
+#define VIDEO_DECODER_BACKPRESSURE_ATTEMPTS 64
 
 typedef struct {
     uint16_t length;
@@ -44,13 +47,14 @@ struct GoVideoPipeline {
     int thread_started;
     atomic_int stop;
     atomic_int accepting_packets;
+    atomic_int restart_epoch_pending;
 
-    const AVCodec* codec;
-    AVCodecContext* decoder;
-    AVPacket* decoder_packet;
-    AVFrame* decoder_frame;
-    AVFrame* cedar_frame;
-    GoCedarLibrary* cedar;
+    GoVideoDecoderSelection decoders;
+    AVFrame* decoded_frame;
+    int max_width;
+    int max_height;
+    char decoder_failure[256];
+    atomic_int failed;
 
     SDL_Texture* texture;
     struct SwsContext* scaler;
@@ -90,6 +94,12 @@ struct GoVideoPipeline {
     atomic_int decoder_send_errors;
     atomic_int decoder_receive_errors;
     atomic_int last_decoder_error;
+    atomic_int decoder_backend;
+    atomic_int decoder_init_failures;
+    atomic_int decoder_runtime_fallbacks;
+    atomic_int decoder_backpressure_events;
+    atomic_int decoder_corrupt_frames;
+    atomic_int decoder_info_changes;
     atomic_int keyframe_requests;
     atomic_int dropped_packets;
 };
@@ -155,14 +165,24 @@ static void publish_frame(GoVideoPipeline* pipeline, AVFrame* frame, const char*
     pthread_mutex_unlock(&pipeline->frame_lock);
 }
 
-static int publish_cedar_frame(GoVideoPipeline* pipeline, const GoCedarFrame* frame) {
-    if (!pipeline->cedar_frame || frame->width <= 0 || frame->height <= 0)
+static int publish_decoded_frame(GoVideoPipeline* pipeline, const GoDecodedVideoFrame* frame) {
+    if (!pipeline->decoded_frame ||
+        go_video_frame_validate(frame, pipeline->max_width, pipeline->max_height) != 0)
         return -1;
-    AVFrame* target = pipeline->cedar_frame;
-    if (target->format != AV_PIX_FMT_NV12 || target->width != frame->width ||
+    enum AVPixelFormat format;
+    if (frame->format == GO_VIDEO_PIXEL_FORMAT_NV12) {
+        format = AV_PIX_FMT_NV12;
+    } else if (frame->format == GO_VIDEO_PIXEL_FORMAT_YUV420P) {
+        format = AV_PIX_FMT_YUV420P;
+    } else {
+        return -1;
+    }
+
+    AVFrame* target = pipeline->decoded_frame;
+    if (target->format != format || target->width != frame->width ||
         target->height != frame->height) {
         av_frame_unref(target);
-        target->format = AV_PIX_FMT_NV12;
+        target->format = format;
         target->width = frame->width;
         target->height = frame->height;
         if (av_frame_get_buffer(target, 32) < 0)
@@ -170,54 +190,129 @@ static int publish_cedar_frame(GoVideoPipeline* pipeline, const GoCedarFrame* fr
     }
     if (av_frame_make_writable(target) < 0)
         return -1;
-    for (int y = 0; y < frame->height; y++)
-        memcpy(target->data[0] + (size_t)y * (size_t)target->linesize[0],
-               frame->y + (size_t)y * (size_t)frame->y_stride, (size_t)frame->width);
-    for (int y = 0; y < frame->height / 2; y++)
-        memcpy(target->data[1] + (size_t)y * (size_t)target->linesize[1],
-               frame->uv + (size_t)y * (size_t)frame->uv_stride, (size_t)frame->width);
-    target->color_range = AVCOL_RANGE_MPEG;
+    if (go_video_frame_copy(frame, pipeline->max_width, pipeline->max_height, target->data,
+                            target->linesize) != 0)
+        return -1;
+    target->color_range =
+        frame->color_range == GO_VIDEO_COLOR_RANGE_FULL ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
     target->colorspace = AVCOL_SPC_BT709;
-    publish_frame(pipeline, target, "cedar-h616");
+    publish_frame(pipeline, target, go_video_decoder_name(pipeline->decoders.active));
     return 0;
 }
 
-static void feed_software_decoder(GoVideoPipeline* pipeline, const uint8_t* data, int length) {
-    pipeline->decoder_packet->data = (uint8_t*)data;
-    pipeline->decoder_packet->size = length;
-    if (avcodec_send_packet(pipeline->decoder, pipeline->decoder_packet) < 0)
-        atomic_fetch_add(&pipeline->decoder_send_errors, 1);
-    int result;
-    while ((result = avcodec_receive_frame(pipeline->decoder, pipeline->decoder_frame)) == 0) {
-        publish_frame(pipeline, pipeline->decoder_frame, "ffmpeg-software");
-        av_frame_unref(pipeline->decoder_frame);
+static int drain_decoder_frames(GoVideoPipeline* pipeline) {
+    for (;;) {
+        GoDecodedVideoFrame frame;
+        GoVideoDecoderResult result =
+            go_video_decoder_receive_frame(pipeline->decoders.active, &frame);
+        if (result == GO_VIDEO_DECODER_RESULT_AGAIN)
+            return 0;
+        if (result == GO_VIDEO_DECODER_RESULT_FATAL) {
+            atomic_fetch_add(&pipeline->decoder_receive_errors, 1);
+            atomic_store(&pipeline->last_decoder_error, -1);
+            snprintf(pipeline->decoder_failure, sizeof(pipeline->decoder_failure), "%s",
+                     go_video_decoder_last_error(pipeline->decoders.active));
+            return -1;
+        }
+        if (frame.corrupt) {
+            atomic_fetch_add(&pipeline->decoder_corrupt_frames, 1);
+            go_video_decoder_release_frame(pipeline->decoders.active, &frame);
+            continue;
+        }
+        if (frame.info_changed)
+            atomic_fetch_add(&pipeline->decoder_info_changes, 1);
+        int publish_result = publish_decoded_frame(pipeline, &frame);
+        go_video_decoder_release_frame(pipeline->decoders.active, &frame);
+        if (publish_result != 0) {
+            snprintf(pipeline->decoder_failure, sizeof(pipeline->decoder_failure),
+                     "decoder returned an invalid frame");
+            return -1;
+        }
     }
-    if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) {
-        atomic_fetch_add(&pipeline->decoder_receive_errors, 1);
-        atomic_store(&pipeline->last_decoder_error, result);
+}
+
+static int switch_to_software_decoder(GoVideoPipeline* pipeline) {
+    if (!pipeline->decoders.allow_runtime_fallback || !pipeline->decoders.software ||
+        pipeline->decoders.active == pipeline->decoders.software)
+        return -1;
+    fprintf(stderr, "%s decoder disabled: %s\n",
+            go_video_decoder_name(pipeline->decoders.active),
+            pipeline->decoder_failure);
+    if (go_video_decoder_selection_fallback(&pipeline->decoders, pipeline->decoder_failure,
+                                            sizeof(pipeline->decoder_failure)) != 0)
+        return -1;
+    atomic_store(&pipeline->decoder_backend,
+                 (int)go_video_decoder_backend(pipeline->decoders.active));
+    atomic_fetch_add(&pipeline->decoder_runtime_fallbacks, 1);
+    go_h264_depacketizer_restart_decode_epoch(pipeline->depacketizer);
+    atomic_store(&pipeline->keyframe_pending, 1);
+    atomic_store(&pipeline->synced, 0);
+    fprintf(stderr, "Selected video decoder: %s\n",
+            go_video_decoder_name(pipeline->decoders.active));
+    return 0;
+}
+
+static void mark_decoder_failed(GoVideoPipeline* pipeline) {
+    if (atomic_exchange(&pipeline->failed, 1))
+        return;
+    atomic_store(&pipeline->accepting_packets, 0);
+    fprintf(stderr, "Video decoder failed: %s\n", pipeline->decoder_failure);
+}
+
+static int decode_with_active_backend(GoVideoPipeline* pipeline, const uint8_t* data,
+                                      size_t length) {
+    for (int attempt = 0; attempt < VIDEO_DECODER_BACKPRESSURE_ATTEMPTS; ++attempt) {
+        if (atomic_load(&pipeline->stop))
+            return 0;
+        GoVideoDecoderResult result =
+            go_video_decoder_submit_access_unit(pipeline->decoders.active, data, length);
+        if (result == GO_VIDEO_DECODER_RESULT_OK)
+            return drain_decoder_frames(pipeline);
+        if (result == GO_VIDEO_DECODER_RESULT_FATAL) {
+            atomic_fetch_add(&pipeline->decoder_send_errors, 1);
+            atomic_store(&pipeline->last_decoder_error, -1);
+            snprintf(pipeline->decoder_failure, sizeof(pipeline->decoder_failure), "%s",
+                     go_video_decoder_last_error(pipeline->decoders.active));
+            return -1;
+        }
+        atomic_fetch_add(&pipeline->decoder_backpressure_events, 1);
+        if (drain_decoder_frames(pipeline) != 0)
+            return -1;
+        if (attempt + 1 < VIDEO_DECODER_BACKPRESSURE_ATTEMPTS)
+            SDL_Delay(1);
     }
+    snprintf(pipeline->decoder_failure, sizeof(pipeline->decoder_failure),
+             "decoder made no progress after %d submit attempts",
+             VIDEO_DECODER_BACKPRESSURE_ATTEMPTS);
+    return -1;
+}
+
+static int select_decoder(GoVideoPipeline* pipeline, GoVideoDecoderPreference preference) {
+    GoVideoDecoderSelectionConfig config = {
+        .max_width = pipeline->max_width,
+        .max_height = pipeline->max_height,
+        .preference = preference,
+    };
+    if (go_video_decoder_selection_create(&config, &pipeline->decoders,
+                                          pipeline->decoder_failure,
+                                          sizeof(pipeline->decoder_failure)) != 0)
+        return -1;
+    atomic_store(&pipeline->decoder_init_failures, pipeline->decoders.init_failures);
+    atomic_store(&pipeline->decoder_backend,
+                 (int)go_video_decoder_backend(pipeline->decoders.active));
+    return 0;
 }
 
 static void decode_access_unit(void* context, const uint8_t* data, size_t length,
                                const GoH264AccessUnit* info) {
     (void)info;
     GoVideoPipeline* pipeline = context;
-    if (length > INT32_MAX || !pipeline->decoder)
+    if (!pipeline->decoders.active || atomic_load(&pipeline->failed))
         return;
-    if (pipeline->cedar) {
-        GoCedarFrame frame;
-        int result = go_cedar_library_feed(pipeline->cedar, data, length, &frame);
-        if (result > 0 && publish_cedar_frame(pipeline, &frame) == 0)
-            return;
-        if (result == 0)
-            return;
-        fprintf(stderr, "Cedar decoder disabled: %s\n", go_cedar_library_error(pipeline->cedar));
-        go_cedar_library_close(pipeline->cedar);
-        pipeline->cedar = NULL;
-        atomic_store(&pipeline->keyframe_pending, 1);
-        atomic_store(&pipeline->synced, 0);
-    }
-    feed_software_decoder(pipeline, data, (int)length);
+    if (decode_with_active_backend(pipeline, data, length) == 0)
+        return;
+    if (switch_to_software_decoder(pipeline) != 0)
+        mark_decoder_failed(pipeline);
 }
 
 static void process_packet(GoVideoPipeline* pipeline, const uint8_t* packet, size_t length) {
@@ -272,6 +367,8 @@ static void* video_worker(void* context) {
             (pipeline->packet_queue_head + 1) % VIDEO_PACKET_QUEUE_CAPACITY;
         pipeline->packet_queue_count--;
         pthread_mutex_unlock(&pipeline->packet_lock);
+        if (atomic_exchange(&pipeline->restart_epoch_pending, 0))
+            go_h264_depacketizer_restart_decode_epoch(pipeline->depacketizer);
         process_packet(pipeline, packet.data, packet.length);
     }
     return NULL;
@@ -367,19 +464,25 @@ static int upload_frame(GoVideoPipeline* pipeline, const AVFrame* frame) {
     return SDL_UpdateTexture(pipeline->texture, NULL, pipeline->rgb_buffer, pipeline->rgb_linesize);
 }
 
-GoVideoPipeline* go_video_pipeline_create(SDL_Renderer* renderer, const char* bootstrap_path) {
-    if (!renderer)
+GoVideoPipeline* go_video_pipeline_create(const GoVideoPipelineConfig* config) {
+    if (!config || !config->renderer || config->max_width <= 0 || config->max_height <= 0 ||
+        config->max_width > 8192 || config->max_height > 8192 ||
+        config->decoder_preference < GO_VIDEO_DECODER_PREFERENCE_AUTO ||
+        config->decoder_preference > GO_VIDEO_DECODER_PREFERENCE_SOFTWARE)
         return NULL;
     GoVideoPipeline* pipeline = calloc(1, sizeof(*pipeline));
     if (!pipeline)
         return NULL;
-    pipeline->renderer = renderer;
+    pipeline->renderer = config->renderer;
+    pipeline->max_width = config->max_width;
+    pipeline->max_height = config->max_height;
     pipeline->direct_nv12_available = 1;
     pipeline->texture_format = SDL_PIXELFORMAT_UNKNOWN;
     atomic_store(&pipeline->keyframe_pending, 1);
     atomic_store(&pipeline->last_rejected_payload_type, -1);
-    if (bootstrap_path && snprintf(pipeline->bootstrap_path, sizeof(pipeline->bootstrap_path), "%s",
-                                   bootstrap_path) >= (int)sizeof(pipeline->bootstrap_path)) {
+    if (config->bootstrap_path &&
+        snprintf(pipeline->bootstrap_path, sizeof(pipeline->bootstrap_path), "%s",
+                 config->bootstrap_path) >= (int)sizeof(pipeline->bootstrap_path)) {
         free(pipeline);
         return NULL;
     }
@@ -399,41 +502,24 @@ GoVideoPipeline* go_video_pipeline_create(SDL_Renderer* renderer, const char* bo
     }
     pipeline->frame_lock_initialized = 1;
     pipeline->depacketizer = go_h264_depacketizer_create(GO_VIDEO_PAYLOAD_TYPE);
-    pipeline->codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!pipeline->depacketizer || !pipeline->codec) {
+    if (!pipeline->depacketizer) {
         go_video_pipeline_destroy(pipeline);
         return NULL;
     }
-    pipeline->decoder = avcodec_alloc_context3(pipeline->codec);
-    if (!pipeline->decoder) {
+    if (load_bootstrap(pipeline) != 0) {
         go_video_pipeline_destroy(pipeline);
         return NULL;
     }
-    pipeline->decoder->thread_count = 3;
-    pipeline->decoder->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-    pipeline->decoder->skip_frame = AVDISCARD_NONREF;
-    if (load_bootstrap(pipeline) != 0 ||
-        avcodec_open2(pipeline->decoder, pipeline->codec, NULL) < 0) {
-        go_video_pipeline_destroy(pipeline);
-        return NULL;
-    }
-    pipeline->decoder_packet = av_packet_alloc();
-    pipeline->decoder_frame = av_frame_alloc();
-    pipeline->cedar_frame = av_frame_alloc();
+    pipeline->decoded_frame = av_frame_alloc();
     pipeline->display_frame = av_frame_alloc();
     pipeline->render_frame = av_frame_alloc();
-    if (!pipeline->decoder_packet || !pipeline->decoder_frame || !pipeline->cedar_frame ||
-        !pipeline->display_frame || !pipeline->render_frame) {
+    if (!pipeline->decoded_frame || !pipeline->display_frame || !pipeline->render_frame) {
         go_video_pipeline_destroy(pipeline);
         return NULL;
     }
-    pipeline->cedar = go_cedar_library_open(1280, 720);
-    if (go_cedar_library_ready(pipeline->cedar)) {
-        go_dbg("H.264 decoder: Cedar hardware acceleration\n");
-    } else {
-        go_dbg("H.264 decoder: software fallback (%s)\n", go_cedar_library_error(pipeline->cedar));
-        go_cedar_library_close(pipeline->cedar);
-        pipeline->cedar = NULL;
+    if (select_decoder(pipeline, config->decoder_preference) != 0) {
+        go_video_pipeline_destroy(pipeline);
+        return NULL;
     }
     return pipeline;
 }
@@ -484,6 +570,7 @@ void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet
     if (length > VIDEO_PACKET_MAX_SIZE) {
         atomic_fetch_add(&pipeline->dropped_packets, 1);
         atomic_store(&pipeline->keyframe_pending, 1);
+        atomic_store(&pipeline->restart_epoch_pending, 1);
         return;
     }
     pthread_mutex_lock(&pipeline->packet_lock);
@@ -493,6 +580,7 @@ void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet
         pipeline->packet_queue_count--;
         atomic_fetch_add(&pipeline->dropped_packets, 1);
         atomic_store(&pipeline->keyframe_pending, 1);
+        atomic_store(&pipeline->restart_epoch_pending, 1);
     }
     VideoPacket* target = &pipeline->packet_queue[pipeline->packet_queue_tail];
     target->length = (uint16_t)length;
@@ -558,6 +646,10 @@ int go_video_pipeline_has_media(const GoVideoPipeline* pipeline) {
     return pipeline && atomic_load(&pipeline->rtp_packets) > 0;
 }
 
+int go_video_pipeline_failed(const GoVideoPipeline* pipeline) {
+    return pipeline && atomic_load(&pipeline->failed);
+}
+
 void go_video_pipeline_note_keyframe_request(GoVideoPipeline* pipeline) {
     if (pipeline)
         atomic_fetch_add(&pipeline->keyframe_requests, 1);
@@ -586,6 +678,12 @@ GoVideoStats go_video_pipeline_stats(GoVideoPipeline* pipeline) {
     stats.decoder_send_errors = atomic_load(&pipeline->decoder_send_errors);
     stats.decoder_receive_errors = atomic_load(&pipeline->decoder_receive_errors);
     stats.last_decoder_error = atomic_load(&pipeline->last_decoder_error);
+    stats.decoder_backend = atomic_load(&pipeline->decoder_backend);
+    stats.decoder_init_failures = atomic_load(&pipeline->decoder_init_failures);
+    stats.decoder_runtime_fallbacks = atomic_load(&pipeline->decoder_runtime_fallbacks);
+    stats.decoder_backpressure_events = atomic_load(&pipeline->decoder_backpressure_events);
+    stats.decoder_corrupt_frames = atomic_load(&pipeline->decoder_corrupt_frames);
+    stats.decoder_info_changes = atomic_load(&pipeline->decoder_info_changes);
     stats.keyframe_requests = atomic_load(&pipeline->keyframe_requests);
     stats.dropped_packets = atomic_load(&pipeline->dropped_packets);
     pthread_mutex_lock(&pipeline->packet_lock);
@@ -614,16 +712,9 @@ int go_video_pipeline_destroy(GoVideoPipeline* pipeline) {
         sws_freeContext(pipeline->scaler);
     free(pipeline->rgb_buffer);
     destroy_texture(pipeline);
-    if (pipeline->cedar)
-        go_cedar_library_close(pipeline->cedar);
-    if (pipeline->cedar_frame)
-        av_frame_free(&pipeline->cedar_frame);
-    if (pipeline->decoder_frame)
-        av_frame_free(&pipeline->decoder_frame);
-    if (pipeline->decoder_packet)
-        av_packet_free(&pipeline->decoder_packet);
-    if (pipeline->decoder)
-        avcodec_free_context(&pipeline->decoder);
+    go_video_decoder_selection_destroy(&pipeline->decoders);
+    if (pipeline->decoded_frame)
+        av_frame_free(&pipeline->decoded_frame);
     if (pipeline->depacketizer)
         go_h264_depacketizer_destroy(pipeline->depacketizer);
     if (pipeline->frame_lock_initialized)

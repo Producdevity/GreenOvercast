@@ -1,29 +1,78 @@
 const std = @import("std");
 
-// H700 target profile: both devices run vendor kernel 4.9.170 with glibc
-// 2.38 (muOS) / 2.40 (Knulli). Targeting the 2.38 ceiling covers both.
-const h700_query: std.Target.Query = .{
+// glibc 2.38 is the oldest userspace supported by the packaged release.
+const aarch64_linux_query: std.Target.Query = .{
     .cpu_arch = .aarch64,
-    .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a53 },
     .os_tag = .linux,
     .abi = .gnu,
     .glibc_version = .{ .major = 2, .minor = 38, .patch = 0 },
 };
 
+const c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
+
+fn addHostZigObject(b: *std.Build, name: []const u8, source: []const u8) *std.Build.Step.Compile {
+    const module = b.createModule(.{
+        .root_source_file = b.path(source),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .link_libc = true,
+    });
+    module.addIncludePath(b.path("src/media/video"));
+    return b.addObject(.{ .name = name, .root_module = module });
+}
+
+fn addHostCExecutable(
+    b: *std.Build,
+    name: []const u8,
+    sources: []const []const u8,
+    objects: []const *std.Build.Step.Compile,
+    link_dl: bool,
+) *std.Build.Step.Compile {
+    const executable = b.addExecutable(.{
+        .name = name,
+        .root_source_file = null,
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    executable.addIncludePath(b.path("src/media/video"));
+    executable.addCSourceFiles(.{ .files = sources, .flags = c_test_flags });
+    for (objects) |object| executable.addObject(object);
+    executable.linkLibC();
+    if (link_dl) executable.linkSystemLibrary("dl");
+    return executable;
+}
+
+fn addHostCFakeLibrary(
+    b: *std.Build,
+    name: []const u8,
+    source: []const u8,
+) *std.Build.Step.Compile {
+    const library = b.addSharedLibrary(.{
+        .name = name,
+        .root_source_file = null,
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    library.addIncludePath(b.path("src/media/video"));
+    library.addCSourceFile(.{ .file = b.path(source), .flags = c_test_flags });
+    library.linkLibC();
+    return library;
+}
+
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
-    const h700 = b.resolveTargetQuery(h700_query);
+    const aarch64_linux = b.resolveTargetQuery(aarch64_linux_query);
 
     const stat_compat = b.createModule(.{
         .root_source_file = b.path("src/platform/linux/stat_compat.zig"),
-        .target = h700,
+        .target = aarch64_linux,
         .optimize = optimize,
     });
 
     const smoke = b.addExecutable(.{
         .name = "greenovercast-smoke",
         .root_source_file = b.path("src/smoke/abi_smoke.zig"),
-        .target = h700,
+        .target = aarch64_linux,
         .optimize = optimize,
         .link_libc = true,
     });
@@ -46,6 +95,9 @@ pub fn build(b: *std.Build) void {
         .{ .name = "greenovercast-cloud", .path = "src/session/cloud_session.zig" },
         .{ .name = "greenovercast-controller", .path = "src/input/controller.zig" },
         .{ .name = "greenovercast-ui", .path = "src/ui/handheld_ui.zig" },
+        .{ .name = "greenovercast-video-decoder", .path = "src/media/video/video_decoder.zig" },
+        .{ .name = "greenovercast-video-decoder-selection", .path = "src/media/video/video_decoder_selection.zig" },
+        .{ .name = "greenovercast-video-frame-copy", .path = "src/media/video/video_frame_copy.zig" },
     };
     const product_include_paths = [_][]const u8{
         "vendor/headers",
@@ -63,7 +115,7 @@ pub fn build(b: *std.Build) void {
     for (product_roots) |root| {
         const module = b.createModule(.{
             .root_source_file = b.path(root.path),
-            .target = h700,
+            .target = aarch64_linux,
             .optimize = .ReleaseSafe,
             .link_libc = true,
         });
@@ -97,4 +149,95 @@ pub fn build(b: *std.Build) void {
         });
         test_step.dependOn(&b.addRunArtifact(unit_tests).step);
     }
+
+    const video_decoder_object =
+        addHostZigObject(b, "video-decoder", "src/media/video/video_decoder.zig");
+    const video_frame_copy_object =
+        addHostZigObject(b, "video-frame-copy", "src/media/video/video_frame_copy.zig");
+    const video_decoder_selection_object = addHostZigObject(
+        b,
+        "video-decoder-selection",
+        "src/media/video/video_decoder_selection.zig",
+    );
+
+    const decoder_contract_test = addHostCExecutable(
+        b,
+        "video-decoder-test",
+        &.{"tests/video_decoder_test.c"},
+        &.{video_decoder_object},
+        false,
+    );
+    test_step.dependOn(&b.addRunArtifact(decoder_contract_test).step);
+
+    const decoder_selection_test = addHostCExecutable(
+        b,
+        "video-decoder-selection-test",
+        &.{"tests/video_decoder_selection_test.c"},
+        &.{ video_decoder_object, video_decoder_selection_object },
+        false,
+    );
+    test_step.dependOn(&b.addRunArtifact(decoder_selection_test).step);
+
+    const frame_copy_test = addHostCExecutable(
+        b,
+        "video-frame-copy-test",
+        &.{"tests/video_frame_copy_test.c"},
+        &.{video_frame_copy_object},
+        false,
+    );
+    test_step.dependOn(&b.addRunArtifact(frame_copy_test).step);
+
+    const fake_cedar_valid =
+        addHostCFakeLibrary(b, "fake-cedar-valid", "tests/cedar_fake_valid.c");
+    const cedar_decoder_test = addHostCExecutable(
+        b,
+        "video-decoder-cedar-test",
+        &.{
+            "src/media/video/cedar_loader.c",
+            "src/media/video/video_decoder_cedar.c",
+            "tests/video_decoder_cedar_test.c",
+        },
+        &.{video_decoder_object},
+        true,
+    );
+    const run_cedar_decoder_test = b.addRunArtifact(cedar_decoder_test);
+    run_cedar_decoder_test.addArtifactArg(fake_cedar_valid);
+    test_step.dependOn(&run_cedar_decoder_test.step);
+
+    const fake_mpp_valid = addHostCFakeLibrary(b, "fake-mpp-valid", "tests/mpp_fake_valid.c");
+    const fake_mpp_wrong_abi =
+        addHostCFakeLibrary(b, "fake-mpp-wrong-abi", "tests/mpp_fake_wrong_abi.c");
+    const fake_mpp_missing_symbol =
+        addHostCFakeLibrary(b, "fake-mpp-missing-symbol", "tests/mpp_fake_missing_symbol.c");
+
+    const mpp_loader_test = addHostCExecutable(
+        b,
+        "mpp-loader-test",
+        &.{
+            "src/media/video/mpp_loader.c",
+            "tests/mpp_loader_test.c",
+        },
+        &.{},
+        true,
+    );
+    const run_mpp_loader_test = b.addRunArtifact(mpp_loader_test);
+    run_mpp_loader_test.addArtifactArg(fake_mpp_valid);
+    run_mpp_loader_test.addArtifactArg(fake_mpp_wrong_abi);
+    run_mpp_loader_test.addArtifactArg(fake_mpp_missing_symbol);
+    test_step.dependOn(&run_mpp_loader_test.step);
+
+    const mpp_decoder_test = addHostCExecutable(
+        b,
+        "video-decoder-mpp-test",
+        &.{
+            "src/media/video/mpp_loader.c",
+            "src/media/video/video_decoder_mpp.c",
+            "tests/video_decoder_mpp_test.c",
+        },
+        &.{video_decoder_object},
+        true,
+    );
+    const run_mpp_decoder_test = b.addRunArtifact(mpp_decoder_test);
+    run_mpp_decoder_test.addArtifactArg(fake_mpp_valid);
+    test_step.dependOn(&run_mpp_decoder_test.step);
 }
