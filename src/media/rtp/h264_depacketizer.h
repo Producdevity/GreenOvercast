@@ -40,9 +40,10 @@ int go_h264_depacketizer_set_bootstrap(GoH264Depacketizer* depacketizer, const u
                                        size_t length);
 int go_h264_depacketizer_take_bootstrap(GoH264Depacketizer* depacketizer, uint8_t* output,
                                         size_t capacity, size_t* length);
-GoH264FeedResult go_h264_depacketizer_feed(GoH264Depacketizer* depacketizer,
-                                           const uint8_t* packet, size_t length,
-                                           GoH264AccessUnitCallback callback, void* context);
+void go_h264_depacketizer_restart_decode_epoch(GoH264Depacketizer* depacketizer);
+GoH264FeedResult go_h264_depacketizer_feed(GoH264Depacketizer* depacketizer, const uint8_t* packet,
+                                           size_t length, GoH264AccessUnitCallback callback,
+                                           void* context);
 
 #ifdef __cplusplus
 }

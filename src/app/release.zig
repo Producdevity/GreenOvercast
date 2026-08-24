@@ -66,10 +66,23 @@ pub const Release = struct {
 
     fn initializeMedia(self: *Release) bool {
         const bootstrap_path = std.posix.getenv("GREENOVERCAST_H264_BOOTSTRAP_FILE");
-        self.video = c.go_video_pipeline_create(
-            c.go_sdl_platform_renderer(self.platform),
-            if (bootstrap_path) |path| path.ptr else null,
-        );
+        const decoder_value = std.posix.getenv("GREENOVERCAST_VIDEO_DECODER");
+        var decoder_preference: c.GoVideoDecoderPreference = c.GO_VIDEO_DECODER_PREFERENCE_AUTO;
+        if (c.go_video_decoder_preference_parse(
+            if (decoder_value) |value| value.ptr else null,
+            &decoder_preference,
+        ) != 0) {
+            std.debug.print("Invalid GREENOVERCAST_VIDEO_DECODER value\n", .{});
+            return false;
+        }
+        const config = c.GoVideoPipelineConfig{
+            .renderer = c.go_sdl_platform_renderer(self.platform),
+            .bootstrap_path = if (bootstrap_path) |path| path.ptr else null,
+            .max_width = 1280,
+            .max_height = 720,
+            .decoder_preference = decoder_preference,
+        };
+        self.video = c.go_video_pipeline_create(&config);
         if (self.video == null or c.go_video_pipeline_start(self.video) < 0) {
             std.debug.print("H.264 pipeline initialization failed\n", .{});
             _ = c.go_video_pipeline_destroy(self.video);
@@ -379,6 +392,8 @@ pub const Release = struct {
                 std.debug.print("Cloud game ended\n", .{});
                 return .session_ended;
             }
+            if (c.go_video_pipeline_failed(self.video) != 0)
+                return .failed;
 
             c.go_webrtc_session_send_gamepad(self.webrtc);
             c.go_video_pipeline_render(self.video);
@@ -417,8 +432,8 @@ pub const Release = struct {
         std.debug.print(
             "[{d}s] video_rtp={d} payload={d} rejected={d}/pt{d} aus={d} frames={d}/{d} " ++
                 "nals={d}/{d}/{d}/{d} ts={d} synced={d} gaps={d} missing={d} late_rtp={d} " ++
-                "decode_errors={d}/{d}/{d} keyframes={d} queue={d}/{d} audio_rtp={d} decoded={d} " ++
-                "dropped={d} late={d} pending={d} queued_ms={d} resets={d} keepalive={d}/{d}\n",
+                "decoder={d} init_failures={d} fallbacks={d} backpressure={d} corrupt={d} " ++
+                "info_changes={d} decode_errors={d}/{d}/{d} keyframes={d} queue={d}/{d}\n",
             .{
                 elapsed_ms / 1000,
                 video.rtp_packets,
@@ -437,12 +452,25 @@ pub const Release = struct {
                 video.discontinuities,
                 video.missing_packets,
                 video.late_packets,
+                video.decoder_backend,
+                video.decoder_init_failures,
+                video.decoder_runtime_fallbacks,
+                video.decoder_backpressure_events,
+                video.decoder_corrupt_frames,
+                video.decoder_info_changes,
                 video.decoder_send_errors,
                 video.decoder_receive_errors,
                 video.last_decoder_error,
                 video.keyframe_requests,
                 video.pending_packets,
                 video.dropped_packets,
+            },
+        );
+        std.debug.print(
+            "[{d}s] audio_rtp={d} decoded={d} dropped={d} late={d} pending={d} " ++
+                "queued_ms={d} resets={d} keepalive={d}/{d}\n",
+            .{
+                elapsed_ms / 1000,
                 audio.rtp_packets,
                 audio.decoded_packets,
                 audio.dropped_packets,

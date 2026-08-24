@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--toolchain-only" ]; }; then
+  echo "usage: $0 [--toolchain-only]" >&2
+  exit 1
+fi
+
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TOOLS="$ROOT/.tools"
 DOWNLOADS="$TOOLS/downloads"
@@ -66,6 +71,10 @@ chmod +x "$AR_WRAPPER" "$RANLIB_WRAPPER"
   printf '%s\n' 'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)'
   printf '%s\n' 'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)'
 } >"$TOOLCHAIN"
+
+if [ "${1:-}" = "--toolchain-only" ]; then
+  exit 0
+fi
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

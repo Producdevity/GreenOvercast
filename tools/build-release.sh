@@ -47,6 +47,7 @@ trap restore_libdatachannel EXIT HUP INT TERM
 
 mkdir -p "$BUILD_DIR" "$OBJECT_DIR" "$ZIG_CACHE_DIR" "$(dirname -- "$OUTPUT")"
 "$ROOT/tools/build-cedarx.sh" "$(dirname -- "$OUTPUT")/libgreenovercast-cedar.so"
+"$ROOT/tools/build-mpp.sh"
 
 export ZIG_GLOBAL_CACHE_DIR="$ZIG_CACHE_DIR"
 cmake_fresh=
@@ -92,9 +93,23 @@ compile_adapter() {
     -c "$source" -o "$object"
 }
 
+compile_zig_video_core() {
+  source=$1
+  object=$2
+  "$ZIG" build-obj "$source" -target aarch64-linux-gnu.2.38 -O ReleaseSafe -lc \
+    -I"$ROOT/src/media/video" -femit-bin="$object"
+}
+
 compile_adapter "$ROOT/src/media/audio/opus_adapter.c" "$OBJECT_DIR/opus_adapter.o"
 compile_adapter "$ROOT/src/media/audio/audio_pipeline.c" "$OBJECT_DIR/audio_pipeline.o"
 compile_adapter "$ROOT/src/media/video/cedar_loader.c" "$OBJECT_DIR/cedar_loader.o"
+compile_zig_video_core "$ROOT/src/media/video/video_decoder.zig" "$OBJECT_DIR/video_decoder.o"
+compile_zig_video_core "$ROOT/src/media/video/video_decoder_selection.zig" "$OBJECT_DIR/video_decoder_selection.o"
+compile_adapter "$ROOT/src/media/video/video_decoder_ffmpeg.c" "$OBJECT_DIR/video_decoder_ffmpeg.o"
+compile_adapter "$ROOT/src/media/video/video_decoder_cedar.c" "$OBJECT_DIR/video_decoder_cedar.o"
+compile_adapter "$ROOT/src/media/video/mpp_loader.c" "$OBJECT_DIR/mpp_loader.o"
+compile_adapter "$ROOT/src/media/video/video_decoder_mpp.c" "$OBJECT_DIR/video_decoder_mpp.o"
+compile_zig_video_core "$ROOT/src/media/video/video_frame_copy.zig" "$OBJECT_DIR/video_frame_copy.o"
 compile_adapter "$ROOT/src/media/video/video_pipeline.c" "$OBJECT_DIR/video_pipeline.o"
 compile_adapter "$ROOT/src/auth/token_store_adapter.c" "$OBJECT_DIR/token_store_adapter.o"
 compile_adapter "$ROOT/src/session/webrtc_session.c" "$OBJECT_DIR/webrtc_session.o"
@@ -142,7 +157,12 @@ compile_adapter "$ROOT/src/platform/sdl_platform.c" "$OBJECT_DIR/sdl_platform.o"
 
 "$ZIG" build-exe "$ROOT/src/main.zig" \
   "$OBJECT_DIR/opus_adapter.o" "$OBJECT_DIR/audio_pipeline.o" \
-  "$OBJECT_DIR/cedar_loader.o" "$OBJECT_DIR/video_pipeline.o" \
+  "$OBJECT_DIR/cedar_loader.o" "$OBJECT_DIR/video_decoder.o" \
+  "$OBJECT_DIR/video_decoder_selection.o" \
+  "$OBJECT_DIR/video_decoder_ffmpeg.o" "$OBJECT_DIR/video_decoder_cedar.o" \
+  "$OBJECT_DIR/mpp_loader.o" "$OBJECT_DIR/video_decoder_mpp.o" \
+  "$OBJECT_DIR/video_frame_copy.o" \
+  "$OBJECT_DIR/video_pipeline.o" \
   "$OBJECT_DIR/token_store_adapter.o" "$OBJECT_DIR/xbox_auth.o" \
   "$OBJECT_DIR/controller.o" \
   "$OBJECT_DIR/cloud_session.o" "$OBJECT_DIR/webrtc_session.o" \

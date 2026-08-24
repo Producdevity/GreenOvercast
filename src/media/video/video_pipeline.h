@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "video_decoder.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12,6 +14,14 @@ extern "C" {
 #define GO_VIDEO_PAYLOAD_TYPE 102
 
 typedef struct GoVideoPipeline GoVideoPipeline;
+
+typedef struct {
+    SDL_Renderer* renderer;
+    const char* bootstrap_path;
+    int max_width;
+    int max_height;
+    GoVideoDecoderPreference decoder_preference;
+} GoVideoPipelineConfig;
 
 typedef struct {
     int rtp_packets;
@@ -33,12 +43,18 @@ typedef struct {
     int decoder_send_errors;
     int decoder_receive_errors;
     int last_decoder_error;
+    GoVideoDecoderBackend decoder_backend;
+    int decoder_init_failures;
+    int decoder_runtime_fallbacks;
+    int decoder_backpressure_events;
+    int decoder_corrupt_frames;
+    int decoder_info_changes;
     int keyframe_requests;
     int pending_packets;
     int dropped_packets;
 } GoVideoStats;
 
-GoVideoPipeline* go_video_pipeline_create(SDL_Renderer* renderer, const char* bootstrap_path);
+GoVideoPipeline* go_video_pipeline_create(const GoVideoPipelineConfig* config);
 int go_video_pipeline_start(GoVideoPipeline* pipeline);
 void go_video_pipeline_stop(GoVideoPipeline* pipeline);
 void go_video_pipeline_set_crop_aspect(GoVideoPipeline* pipeline, unsigned int width,
@@ -47,6 +63,7 @@ void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet
 void go_video_pipeline_render(GoVideoPipeline* pipeline);
 int go_video_pipeline_needs_keyframe(const GoVideoPipeline* pipeline);
 int go_video_pipeline_has_media(const GoVideoPipeline* pipeline);
+int go_video_pipeline_failed(const GoVideoPipeline* pipeline);
 void go_video_pipeline_note_keyframe_request(GoVideoPipeline* pipeline);
 GoVideoStats go_video_pipeline_stats(GoVideoPipeline* pipeline);
 int go_video_pipeline_destroy(GoVideoPipeline* pipeline);

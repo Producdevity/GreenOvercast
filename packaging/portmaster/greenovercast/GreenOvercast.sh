@@ -57,8 +57,25 @@ export GREENOVERCAST_TOKEN_KEY_FILE="$credential_key_file"
 export GREENOVERCAST_H264_BOOTSTRAP_FILE="$video_bootstrap_file"
 export GREENOVERCAST_CATALOG_FILE="$catalog_file"
 export GREENOVERCAST_CEDAR_LIBRARY="$GAMEDIR/libgreenovercast-cedar.so"
+export GREENOVERCAST_MPP_LIBRARY="$GAMEDIR/libgreenovercast-mpp.so"
 export LD_LIBRARY_PATH="$GAMEDIR:${LD_LIBRARY_PATH:-}"
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
+
+if [ -e /dev/vpu_service ] && { [ ! -r /dev/vpu_service ] || [ ! -w /dev/vpu_service ]; }; then
+  $ESUDO chgrp video /dev/vpu_service && $ESUDO chmod 660 /dev/vpu_service
+fi
+
+for compatible_file in /proc/device-tree/compatible /sys/firmware/devicetree/base/compatible; do
+  if [ -r "$compatible_file" ] && tr '\0' '\n' <"$compatible_file" | grep -q '^rockchip,'; then
+    $ESUDO chmod +x "$GAMEDIR/rockchip/greenovercast-mpp-probe.aarch64"
+    if ! GREENOVERCAST_MPP_LIBRARY="$GREENOVERCAST_MPP_LIBRARY" \
+      LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+      "$GAMEDIR/rockchip/greenovercast-mpp-probe.aarch64" >/dev/null 2>&1; then
+      export LD_LIBRARY_PATH="$GAMEDIR/rockchip:$LD_LIBRARY_PATH"
+    fi
+    break
+  fi
+done
 
 if [ -S /var/run/pipewire-0 ]; then
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/var/run}"
