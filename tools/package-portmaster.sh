@@ -8,6 +8,9 @@ PORTMASTER_NEW=${PORTMASTER_NEW:-${2:-}}
 SOURCE="$ROOT/packaging/portmaster/greenovercast"
 BINARY="$ROOT/zig-out/bin/webrtc_stream"
 CEDAR="$ROOT/zig-out/bin/libgreenovercast-cedar.so"
+MPP_PLUGIN="$ROOT/zig-out/rockchip/libgreenovercast-mpp.so"
+MPP_RUNTIME="$ROOT/zig-out/rockchip/librockchip_mpp.so.1"
+MPP_PROBE="$ROOT/zig-out/rockchip/greenovercast-mpp-probe.aarch64"
 AVCODEC="$ROOT/zig-out/bin/libavcodec.so.58"
 AVUTIL="$ROOT/zig-out/bin/libavutil.so.56"
 SWSCALE="$ROOT/zig-out/bin/libswscale.so.5"
@@ -25,6 +28,12 @@ esac
   echo "missing Cedar library: $CEDAR" >&2
   exit 1
 }
+for mpp_file in "$MPP_PLUGIN" "$MPP_RUNTIME" "$MPP_PROBE"; do
+  [ -f "$mpp_file" ] || {
+    echo "missing Rockchip MPP file: $mpp_file" >&2
+    exit 1
+  }
+done
 for private_library in "$AVCODEC" "$AVUTIL" "$SWSCALE"; do
   [ -f "$private_library" ] || {
     echo "missing private library: $private_library" >&2
@@ -54,11 +63,22 @@ cp "$PORTMASTER_NEW/SOURCE_SETUP.txt" "$checker/SOURCE_SETUP.txt"
 cp -R "$SOURCE" "$port"
 cp "$BINARY" "$port/greenovercast/webrtc_stream.aarch64"
 cp "$CEDAR" "$port/greenovercast/libgreenovercast-cedar.so"
+mkdir -p "$port/greenovercast/rockchip"
+cp "$MPP_PLUGIN" "$port/greenovercast/libgreenovercast-mpp.so"
+cp "$MPP_RUNTIME" "$port/greenovercast/rockchip/librockchip_mpp.so.1"
+cp "$MPP_PROBE" "$port/greenovercast/rockchip/greenovercast-mpp-probe.aarch64"
+cp "$ROOT/vendor/mpp/LICENSES/Apache-2.0" \
+  "$port/greenovercast/licenses/LICENSE.Rockchip-MPP-Apache-2.0.txt"
+cp "$ROOT/vendor/mpp/LICENSES/MIT" \
+  "$port/greenovercast/licenses/LICENSE.Rockchip-MPP-MIT.txt"
 cp "$AVCODEC" "$port/greenovercast/libavcodec.so.58"
 cp "$AVUTIL" "$port/greenovercast/libavutil.so.56"
 cp "$SWSCALE" "$port/greenovercast/libswscale.so.5"
 chmod 644 "$port/GreenOvercast.sh" "$port/greenovercast/webrtc_stream.aarch64" \
   "$port/greenovercast/libgreenovercast-cedar.so" \
+  "$port/greenovercast/libgreenovercast-mpp.so" \
+  "$port/greenovercast/rockchip/librockchip_mpp.so.1" \
+  "$port/greenovercast/rockchip/greenovercast-mpp-probe.aarch64" \
   "$port/greenovercast/libavcodec.so.58" \
   "$port/greenovercast/libavutil.so.56" \
   "$port/greenovercast/libswscale.so.5"
@@ -92,6 +112,11 @@ required = {
     "greenovercast/screenshot.png",
     "greenovercast/webrtc_stream.aarch64",
     "greenovercast/libgreenovercast-cedar.so",
+    "greenovercast/libgreenovercast-mpp.so",
+    "greenovercast/rockchip/librockchip_mpp.so.1",
+    "greenovercast/rockchip/greenovercast-mpp-probe.aarch64",
+    "greenovercast/licenses/LICENSE.Rockchip-MPP-Apache-2.0.txt",
+    "greenovercast/licenses/LICENSE.Rockchip-MPP-MIT.txt",
     "greenovercast/libavcodec.so.58",
     "greenovercast/libavutil.so.56",
     "greenovercast/libswscale.so.5",

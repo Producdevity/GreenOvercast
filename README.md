@@ -3,7 +3,8 @@
 <img width="640" height="480" alt="screenshot" src="https://github.com/user-attachments/assets/4ec93eeb-8795-44e5-9ba8-c6065adf4660" />
 
 GreenOvercast is a native Xbox Cloud Gaming client for small ARM64 Linux
-handhelds. It streams at 720p and uses the H700 video decoder.
+handhelds. It streams at 720p and uses hardware video decoding on supported
+H700 and Rockchip firmware.
 
 Built for the Anbernic RG35XX-H (muOS) and validated on the RG40XX-H (Knulli).
 
@@ -24,7 +25,7 @@ The first launch shows a Microsoft device code. Open
 [microsoft.com/link](https://www.microsoft.com/link) on another device and enter
 the code to sign in. Knulli asks you to sign in again after a reboot.
 
-GreenOvercast is experimental and has only been tested on the devices below.
+GreenOvercast is experimental.
 
 ## Controls
 
@@ -54,8 +55,9 @@ support 16:9.
 | RG35XX-H | muOS 2508.4          | Tested |
 | RG40XX-H | Knulli (Batocera 42) | Tested |
 
-Hardware decoding currently only works on H700 devices. Other devices fall
-back to software decoding, which is too slow for normal gameplay.
+Rockchip MPP decoding also works on ROCKNIX, but support depends on the device
+and firmware. Other devices fall back to software decoding, which is too slow
+for normal gameplay.
 
 The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
 supported.
