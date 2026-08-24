@@ -22,7 +22,8 @@ fn validate(frame: *const c.GoDecodedVideoFrame, max_width: c_int, max_height: c
 
     const chroma_height = @divTrunc(frame.height + 1, 2);
     if (frame.format == c.GO_VIDEO_PIXEL_FORMAT_NV12) {
-        return validPlane(frame.planes[1], frame.strides[1], frame.width, chroma_height);
+        const chroma_width = frame.width + @mod(frame.width, 2);
+        return validPlane(frame.planes[1], frame.strides[1], chroma_width, chroma_height);
     }
     if (frame.format == c.GO_VIDEO_PIXEL_FORMAT_YUV420P) {
         const chroma_width = @divTrunc(frame.width + 1, 2);
@@ -77,7 +78,7 @@ pub export fn go_video_frame_copy(
 
     const chroma_height: c_int = @divTrunc(frame.height + 1, 2);
     const chroma_width: c_int = if (frame.format == c.GO_VIDEO_PIXEL_FORMAT_NV12)
-        frame.width
+        frame.width + @mod(frame.width, 2)
     else
         @divTrunc(frame.width + 1, 2);
     if (!validPlane(planes[1], strides[1], chroma_width, chroma_height) or

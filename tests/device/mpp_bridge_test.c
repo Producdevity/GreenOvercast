@@ -78,6 +78,22 @@ static int submit_access_unit(GoMppLibrary* library, const uint8_t* data, size_t
     return -1;
 }
 
+static int drain_until_minimum(GoMppLibrary* library, TestState* state, int minimum_frames) {
+    int idle_passes = 0;
+    while (state->frames < minimum_frames && idle_passes < 10) {
+        int previous_frames = state->frames;
+        if (drain_frames(library, state) != 0)
+            return -1;
+        if (state->frames == previous_frames) {
+            idle_passes++;
+            usleep(1000);
+        } else {
+            idle_passes = 0;
+        }
+    }
+    return 0;
+}
+
 static size_t start_code_length(const uint8_t* data, size_t length, size_t offset) {
     if (offset + 3 <= length && data[offset] == 0 && data[offset + 1] == 0 && data[offset + 2] == 1)
         return 3;
@@ -203,7 +219,7 @@ int main(int argc, char** argv) {
         access_unit_start = access_unit_end;
         next_aud = find_next_aud(data, length, access_unit_start + 4);
     }
-    if (!failed && drain_frames(library, &state) != 0)
+    if (!failed && drain_until_minimum(library, &state, minimum_frames) != 0)
         failed = 1;
 
     go_mpp_library_close(library);

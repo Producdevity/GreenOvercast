@@ -29,6 +29,8 @@ int main(int argc, char** argv) {
     assert(frame.strides[0] == 4 && frame.strides[1] == 4);
     assert(frame.info_changed == 1);
     assert(frame.backend_frame != NULL);
+    assert(go_video_decoder_reset(decoder) == -1);
+    assert(strstr(go_video_decoder_last_error(decoder), "frame outstanding") != NULL);
     go_video_decoder_release_frame(decoder, &frame);
     assert(frame.backend_frame == NULL);
 
@@ -51,6 +53,11 @@ int main(int argc, char** argv) {
     assert(strstr(go_video_decoder_last_error(decoder), "fake runtime failure") != NULL);
 
     go_video_decoder_destroy(decoder);
+
+    memset(error, 0, sizeof(error));
+    decoder = go_video_decoder_mpp_create(13, 720, error, sizeof(error));
+    assert(decoder == NULL);
+    assert(strstr(error, "initialization failed") != NULL);
     unsetenv("GREENOVERCAST_MPP_LIBRARY");
     return 0;
 }

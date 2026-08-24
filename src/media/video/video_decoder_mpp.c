@@ -50,7 +50,7 @@ static GoVideoDecoderResult mpp_receive(GoVideoDecoder* base, GoDecodedVideoFram
     output->color_range = GO_VIDEO_COLOR_RANGE_LIMITED;
     output->width = decoder->active_frame.width;
     output->height = decoder->active_frame.height;
-    output->coded_width = decoder->active_frame.y_stride;
+    output->coded_width = decoder->active_frame.width;
     output->coded_height = decoder->active_frame.height;
     output->planes[0] = decoder->active_frame.y;
     output->planes[1] = decoder->active_frame.uv;
@@ -80,8 +80,11 @@ static void mpp_release(GoVideoDecoder* base, GoDecodedVideoFrame* frame) {
 
 static int mpp_reset(GoVideoDecoder* base) {
     GoMppVideoDecoder* decoder = (GoMppVideoDecoder*)base;
-    if (decoder->frame_outstanding)
+    if (decoder->frame_outstanding) {
+        snprintf(decoder->error, sizeof(decoder->error),
+                 "MPP reset refused with a frame outstanding");
         return -1;
+    }
     int result = go_mpp_library_reset(decoder->library);
     if (result < 0)
         copy_mpp_error(decoder);
@@ -90,6 +93,7 @@ static int mpp_reset(GoVideoDecoder* base) {
         decoder->last_height = 0;
         decoder->last_y_stride = 0;
         decoder->last_uv_stride = 0;
+        decoder->error[0] = '\0';
     }
     return result;
 }

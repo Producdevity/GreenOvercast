@@ -6,6 +6,7 @@
 
 static void test_nv12(int width, int height, int source_padding, int destination_padding) {
     int chroma_height = (height + 1) / 2;
+    int chroma_width = width + width % 2;
     int source_stride = width + source_padding;
     int destination_stride = width + destination_padding;
     size_t source_size = (size_t)source_stride * (size_t)(height + chroma_height);
@@ -35,7 +36,8 @@ static void test_nv12(int width, int height, int source_padding, int destination
                       frame.planes[0] + (size_t)row * (size_t)source_stride, (size_t)width) == 0);
     for (int row = 0; row < chroma_height; ++row)
         assert(memcmp(planes[1] + (size_t)row * (size_t)destination_stride,
-                      frame.planes[1] + (size_t)row * (size_t)source_stride, (size_t)width) == 0);
+                      frame.planes[1] + (size_t)row * (size_t)source_stride,
+                      (size_t)chroma_width) == 0);
     free(destination);
     free(source);
 }
@@ -70,6 +72,7 @@ int main(void) {
     test_nv12(1280, 720, 64, 32);
     test_nv12(1920, 1080, 128, 64);
     test_nv12(8, 5, 4, 2);
+    test_nv12(7, 5, 3, 2);
     test_yuv420p();
 
     uint8_t plane[16] = {0};

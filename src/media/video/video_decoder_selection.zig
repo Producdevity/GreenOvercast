@@ -88,7 +88,6 @@ pub export fn go_video_decoder_selection_create(
     output.* = std.mem.zeroes(c.GoVideoDecoderSelection);
     if (settings.max_width <= 0 or settings.max_height <= 0 or
         settings.max_width > 8192 or settings.max_height > 8192 or
-        settings.preference < c.GO_VIDEO_DECODER_PREFERENCE_AUTO or
         settings.preference > c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE)
     {
         writeError(error_output, error_capacity, "invalid video decoder configuration");

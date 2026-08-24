@@ -30,6 +30,7 @@ static int open_cedar(GoCedarVideoDecoder* decoder) {
         decoder->library = NULL;
         return -1;
     }
+    decoder->error[0] = '\0';
     return 0;
 }
 
@@ -56,7 +57,7 @@ static GoVideoDecoderResult cedar_receive(GoVideoDecoder* base, GoDecodedVideoFr
     output->color_range = GO_VIDEO_COLOR_RANGE_LIMITED;
     output->width = frame->width;
     output->height = frame->height;
-    output->coded_width = frame->y_stride;
+    output->coded_width = frame->width;
     output->coded_height = frame->height;
     output->planes[0] = frame->y;
     output->planes[1] = frame->uv;
@@ -84,6 +85,11 @@ static void cedar_release(GoVideoDecoder* base, GoDecodedVideoFrame* frame) {
 
 static int cedar_reset(GoVideoDecoder* base) {
     GoCedarVideoDecoder* decoder = (GoCedarVideoDecoder*)base;
+    if (decoder->frame_outstanding) {
+        snprintf(decoder->error, sizeof(decoder->error),
+                 "Cedar reset refused with a frame outstanding");
+        return -1;
+    }
     go_cedar_library_close(decoder->library);
     decoder->library = NULL;
     decoder->frame_pending = 0;

@@ -27,9 +27,11 @@ typedef struct {
 GO_MPP_API uint32_t go_mpp_decoder_abi_version(void);
 GO_MPP_API GoMppDecoder* go_mpp_decoder_create(int max_width, int max_height);
 GO_MPP_API int go_mpp_decoder_submit(GoMppDecoder* decoder, const uint8_t* data, size_t length);
+/* A successful receive transfers frame->owner until release_frame is called. */
 GO_MPP_API int go_mpp_decoder_receive(GoMppDecoder* decoder, GoMppFrame* frame);
 GO_MPP_API void go_mpp_decoder_release_frame(GoMppDecoder* decoder, GoMppFrame* frame);
 GO_MPP_API int go_mpp_decoder_reset(GoMppDecoder* decoder);
+/* decoder may be NULL after create fails and must return that thread's creation error. */
 GO_MPP_API const char* go_mpp_decoder_last_error(GoMppDecoder* decoder);
 GO_MPP_API void go_mpp_decoder_destroy(GoMppDecoder* decoder);
 

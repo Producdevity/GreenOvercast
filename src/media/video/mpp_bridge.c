@@ -202,7 +202,7 @@ int go_mpp_decoder_submit(GoMppDecoder* decoder, const uint8_t* data, size_t len
     mpp_packet_deinit(&packet);
     if (result == MPP_OK)
         return 1;
-    if (result == MPP_NOK || result == MPP_ERR_TIMEOUT || result == MPP_ERR_BUFFER_FULL)
+    if (result == MPP_ERR_TIMEOUT || result == MPP_ERR_BUFFER_FULL)
         return 0;
     set_mpp_error(decoder, "MPP packet submission failed", result);
     return -1;

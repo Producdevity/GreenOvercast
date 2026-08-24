@@ -31,6 +31,8 @@ int main(int argc, char** argv) {
     assert(frame.info_changed == 1);
     assert(go_video_decoder_submit_access_unit(decoder, access_unit, sizeof(access_unit)) ==
            GO_VIDEO_DECODER_RESULT_AGAIN);
+    assert(go_video_decoder_reset(decoder) == -1);
+    assert(strstr(go_video_decoder_last_error(decoder), "frame outstanding") != NULL);
     go_video_decoder_release_frame(decoder, &frame);
 
     assert(go_video_decoder_reset(decoder) == 0);
