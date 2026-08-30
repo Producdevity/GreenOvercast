@@ -31,7 +31,8 @@ pub export fn go_sdl_platform_create(
 ) ?*Platform {
     const platform = std.heap.c_allocator.create(Platform) catch return null;
     platform.* = .{};
-    errdefer go_sdl_platform_destroy(platform);
+    var created = false;
+    defer if (!created) go_sdl_platform_destroy(platform);
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO | c.SDL_INIT_JOYSTICK | c.SDL_INIT_GAMECONTROLLER) != 0) {
         sdlError("SDL_Init");
@@ -109,6 +110,7 @@ pub export fn go_sdl_platform_create(
         return null;
     }
     if (debugEnabled()) std.debug.print("Audio: {d} Hz stereo s16\n", .{obtained.freq});
+    created = true;
     return platform;
 }
 

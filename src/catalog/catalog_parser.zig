@@ -175,7 +175,6 @@ fn findImage(value: std.json.Value, purpose: []const u8) ?[]const u8 {
 }
 
 fn writeArtworkUrl(destination: []u8, uri: []const u8) bool {
-    @memset(destination, 0);
     const prefix = if (std.mem.startsWith(u8, uri, "//")) "https:" else "";
     if (prefix.len == 0 and !std.mem.startsWith(u8, uri, "https://")) return false;
     const suffix = if (std.mem.indexOfScalar(u8, uri, '?') == null)
@@ -184,6 +183,7 @@ fn writeArtworkUrl(destination: []u8, uri: []const u8) bool {
         "&w=320&h=480&format=jpg";
     const length = prefix.len + uri.len + suffix.len;
     if (length >= destination.len) return false;
+    @memset(destination, 0);
     @memcpy(destination[0..prefix.len], prefix);
     @memcpy(destination[prefix.len..][0..uri.len], uri);
     @memcpy(destination[prefix.len + uri.len ..][0..suffix.len], suffix);
@@ -301,5 +301,18 @@ test "metadata parsing follows nested localized properties" {
     try std.testing.expectEqualStrings(
         "https://images.example/poster?w=320&h=480&format=jpg",
         cString(&titles[0].artwork_url),
+    );
+}
+
+test "invalid artwork does not replace a valid URL" {
+    var destination = [_]u8{0} ** artwork_url_capacity;
+    try std.testing.expect(writeArtworkUrl(&destination, "https://images.example/poster"));
+    try std.testing.expect(!writeArtworkUrl(&destination, "http://images.example/invalid"));
+    var too_long = [_]u8{'a'} ** artwork_url_capacity;
+    @memcpy(too_long[0..8], "https://");
+    try std.testing.expect(!writeArtworkUrl(&destination, &too_long));
+    try std.testing.expectEqualStrings(
+        "https://images.example/poster?w=320&h=480&format=jpg",
+        cString(&destination),
     );
 }

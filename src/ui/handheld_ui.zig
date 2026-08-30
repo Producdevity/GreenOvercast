@@ -160,8 +160,8 @@ fn drawKey(
 fn keyboardRowWidth(keys: []const keyboard.Key) c_int {
     var width: c_int = 0;
     for (keys, 0..) |key, index| {
-        width += @as(c_int, key.width_units) * 48;
-        if (index + 1 < keys.len) width += 5;
+        width += @as(c_int, key.width_units) * keyboard.unit_width;
+        if (index + 1 < keys.len) width += keyboard.gap_width;
     }
     return width;
 }
@@ -201,9 +201,9 @@ fn drawKeyboard(
         var x = @divTrunc(style.display_width - row_width, 2);
         const y: c_int = @intCast(174 + row * 52);
         for (keys, 0..) |key, column| {
-            const width = @as(c_int, key.width_units) * 48;
+            const width = @as(c_int, key.width_units) * keyboard.unit_width;
             drawKey(ui.renderer, x, y, width, key, row == selection.row and column == selection.column);
-            x += width + 5;
+            x += width + keyboard.gap_width;
         }
     }
     font.text(ui.renderer, 16, 408, 2, "A TYPE  X DELETE  Y CLEAR  B CANCEL", style.bright());

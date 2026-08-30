@@ -11,6 +11,9 @@ pub const Key = struct {
     width_units: u8 = 1,
 };
 
+pub const unit_width = 48;
+pub const gap_width = 5;
+
 const row_letters_1 = [_]Key{
     .{ .label = "Q", .action = .{ .character = 'Q' } },
     .{ .label = "W", .action = .{ .character = 'W' } },
@@ -80,17 +83,48 @@ pub const Selection = struct {
     }
 
     pub fn moveVertical(self: *Selection, direction: i8) void {
+        const current_center = keyCenter(self.row, self.column);
         if (direction < 0)
             self.row = if (self.row == 0) rows.len - 1 else self.row - 1
         else
             self.row = (self.row + 1) % rows.len;
-        self.column = @min(self.column, rows[self.row].len - 1);
+        self.column = nearestColumn(self.row, current_center);
     }
 
     pub fn key(self: Selection) Key {
         return rows[self.row][self.column];
     }
 };
+
+fn rowWidth(row: usize) i32 {
+    var width: i32 = 0;
+    for (rows[row], 0..) |key, index| {
+        width += @as(i32, key.width_units) * unit_width;
+        if (index + 1 < rows[row].len) width += gap_width;
+    }
+    return width;
+}
+
+fn keyCenter(row: usize, column: usize) i32 {
+    var offset: i32 = 0;
+    for (rows[row][0..column]) |key|
+        offset += @as(i32, key.width_units) * unit_width + gap_width;
+    const width = @as(i32, rows[row][column].width_units) * unit_width;
+    return -rowWidth(row) + 2 * offset + width;
+}
+
+fn nearestColumn(row: usize, center: i32) usize {
+    var nearest: usize = 0;
+    var nearest_distance = @abs(keyCenter(row, 0) - center);
+    for (1..rows[row].len) |column| {
+        const distance = @abs(keyCenter(row, column) - center);
+        if (distance < nearest_distance) {
+            nearest = column;
+            nearest_distance = distance;
+        }
+    }
+    return nearest;
+}
 
 pub fn activate(selection: Selection, query: []u8) void {
     const length = std.mem.indexOfScalar(u8, query, 0) orelse query.len;
@@ -128,5 +162,15 @@ test "selection wraps and stays within the next row" {
     selection.moveVertical(1);
     try std.testing.expectEqual(@as(usize, 8), selection.column);
     selection.moveVertical(1);
+    try std.testing.expectEqual(@as(usize, 7), selection.column);
+}
+
+test "vertical movement follows the visual center of the space key" {
+    var selection = Selection{ .row = 2, .column = 7 };
+    selection.moveVertical(1);
+    try std.testing.expectEqual(@as(usize, 3), selection.row);
+    try std.testing.expectEqual(@as(usize, 8), selection.column);
+    selection.moveVertical(-1);
+    try std.testing.expectEqual(@as(usize, 2), selection.row);
     try std.testing.expectEqual(@as(usize, 7), selection.column);
 }

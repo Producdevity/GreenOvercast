@@ -1,4 +1,5 @@
 const std = @import("std");
+const guide_chord = @import("guide_chord.zig");
 const wire = @import("wire_encoder.zig");
 
 const c = @cImport({
@@ -11,8 +12,7 @@ const Input = struct {
     sequence: u32 = 0,
     exit_held_since: c.Uint32 = 0,
     face_layout: c.GoFaceButtonLayout = c.GO_FACE_BUTTON_LAYOUT_XBOX,
-    guide_chord_active: bool = false,
-    guide_pulse_packets: u8 = 0,
+    guide_chord: guide_chord.State = .{},
     pressed_buttons: u32 = 0,
 };
 
@@ -46,8 +46,7 @@ fn openController(input: *Input, device_index: c_int) void {
     if (input.controller) |controller| c.SDL_GameControllerClose(controller);
     input.controller = next;
     input.exit_held_since = 0;
-    input.guide_chord_active = false;
-    input.guide_pulse_packets = 0;
+    input.guide_chord.reset();
     input.pressed_buttons = 0;
     const name = c.SDL_GameControllerName(next);
     debug("Controller active: {s} ({d} btn, {d} axes)\n", .{
@@ -149,8 +148,7 @@ pub export fn go_controller_input_handle_event(input: ?*Input, event: ?*const c.
     if (handle.controller) |controller| c.SDL_GameControllerClose(controller);
     handle.controller = null;
     handle.exit_held_since = 0;
-    handle.guide_chord_active = false;
-    handle.guide_pulse_packets = 0;
+    handle.guide_chord.reset();
     handle.pressed_buttons = 0;
     var index: c_int = 0;
     while (index < c.SDL_NumJoysticks()) : (index += 1) {
@@ -247,21 +245,9 @@ pub export fn go_controller_input_encode(
     if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) source_buttons |= wire.SourceButton.dpad_right;
     const left_stick = button(handle, c.SDL_CONTROLLER_BUTTON_LEFTSTICK);
     const right_stick = button(handle, c.SDL_CONTROLLER_BUTTON_RIGHTSTICK);
-    if (handle.guide_chord_active) {
-        if (handle.guide_pulse_packets > 0) {
-            source_buttons |= wire.SourceButton.left_stick | wire.SourceButton.right_stick;
-            handle.guide_pulse_packets -= 1;
-        } else if (!left_stick and !right_stick) {
-            handle.guide_chord_active = false;
-        }
-    } else if (left_stick and right_stick) {
-        source_buttons |= wire.SourceButton.left_stick | wire.SourceButton.right_stick;
-        handle.guide_chord_active = true;
-        handle.guide_pulse_packets = 7;
-    } else {
-        if (left_stick) source_buttons |= wire.SourceButton.left_stick;
-        if (right_stick) source_buttons |= wire.SourceButton.right_stick;
-    }
+    const stick_buttons = handle.guide_chord.update(left_stick, right_stick);
+    if (stick_buttons.left) source_buttons |= wire.SourceButton.left_stick;
+    if (stick_buttons.right) source_buttons |= wire.SourceButton.right_stick;
 
     const raw_left_y = axis(handle, c.SDL_CONTROLLER_AXIS_LEFTY);
     const raw_right_y = axis(handle, c.SDL_CONTROLLER_AXIS_RIGHTY);

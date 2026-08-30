@@ -432,7 +432,6 @@ fn configureRenderer(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
             requested_format != pipeline.texture_format)) destroyTexture(pipeline);
     if (pipeline.texture == null) {
         if (direct_nv12) {
-            c.SDL_SetYUVConversionMode(c.SDL_YUV_CONVERSION_BT709);
             pipeline.texture = c.SDL_CreateTexture(
                 pipeline.renderer,
                 c.SDL_PIXELFORMAT_NV12,
@@ -504,6 +503,10 @@ fn configureRenderer(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
 fn uploadFrame(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
     if (configureRenderer(pipeline, frame) < 0) return -1;
     if (pipeline.texture_format == c.SDL_PIXELFORMAT_NV12) {
+        c.SDL_SetYUVConversionMode(if (frame.color_range == c.AVCOL_RANGE_JPEG)
+            c.SDL_YUV_CONVERSION_JPEG
+        else
+            c.SDL_YUV_CONVERSION_BT709);
         if (c.SDL_UpdateNVTexture(
             pipeline.texture,
             null,

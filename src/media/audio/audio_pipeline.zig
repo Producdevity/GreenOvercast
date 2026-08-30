@@ -167,6 +167,7 @@ pub export fn go_audio_pipeline_push_rtp(
 
     pipeline.mutex.lock();
     defer pipeline.mutex.unlock();
+    if (!pipeline.accepting_packets.load(.acquire)) return;
     if (pipeline.queue_count == queue_capacity) {
         _ = pipeline.dropped_packets.fetchAdd(1, .monotonic);
         return;

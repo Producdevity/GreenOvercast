@@ -102,8 +102,15 @@ pub const Store = struct {
             if (line.len == 0) continue;
             var fields = std.mem.splitScalar(u8, line, '\t');
             const kind = fields.next() orelse continue;
+            if (!found_version) {
+                if (!std.mem.eql(u8, kind, "version") or
+                    !std.mem.eql(u8, fields.next() orelse "", "1") or
+                    fields.next() != null) return error.UnsupportedSettings;
+                found_version = true;
+                continue;
+            }
             if (std.mem.eql(u8, kind, "version")) {
-                found_version = std.mem.eql(u8, fields.next() orelse "", "1");
+                return error.UnsupportedSettings;
             } else if (std.mem.eql(u8, kind, "face_layout")) {
                 const value = fields.next() orelse continue;
                 if (std.mem.eql(u8, value, "xbox")) self.face_layout = .xbox;
@@ -126,9 +133,11 @@ pub fn productId(game_settings: *const GameSettings) []const u8 {
     return std.mem.sliceTo(&game_settings.product_id, 0);
 }
 
-fn validProductId(value: []const u8) bool {
+pub fn validProductId(value: []const u8) bool {
     if (value.len == 0 or value.len >= product_id_capacity) return false;
-    for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
+    for (value) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
+    }
     return true;
 }
 
@@ -155,5 +164,8 @@ test "settings round trip through the file format" {
 test "settings reject unknown versions and unsafe ids" {
     var store = Store{};
     try std.testing.expectError(error.UnsupportedSettings, store.parse("version\t2\n"));
+    try std.testing.expectError(error.UnsupportedSettings, store.parse("version\t2\nversion\t1\n"));
+    try std.testing.expectError(error.UnsupportedSettings, store.parse("version\t1\nversion\t1\n"));
+    try std.testing.expectError(error.UnsupportedSettings, store.parse("artwork\t0\nversion\t1\n"));
     try std.testing.expect(store.game("bad\tid") == null);
 }

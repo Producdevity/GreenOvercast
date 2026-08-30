@@ -454,6 +454,7 @@ pub fn build(b: *std.Build) void {
         "src/catalog/catalog_parser.zig",
         "src/catalog/catalog_search.zig",
         "src/input/wire_encoder.zig",
+        "src/input/guide_chord.zig",
         "src/session/message_protocol.zig",
         "src/ui/keyboard.zig",
         "src/ui/navigation_repeat.zig",

@@ -227,6 +227,11 @@ fn confirmSignOut(
         while (c.SDL_PollEvent(&event) != 0) {
             c.go_controller_input_handle_event(controller, &event);
             if (event.type == c.SDL_QUIT) return .cancelled;
+            if (event.type == c.SDL_KEYDOWN) switch (event.key.keysym.sym) {
+                c.SDLK_RETURN => return .sign_out,
+                c.SDLK_ESCAPE => return .back,
+                else => {},
+            };
             if (event.type == c.SDL_CONTROLLERBUTTONDOWN and
                 c.go_controller_input_event_is_active(controller, &event) != 0)
             {

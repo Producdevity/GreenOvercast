@@ -1,4 +1,5 @@
 const std = @import("std");
+const settings = @import("persistent_settings.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -8,7 +9,7 @@ const c = @cImport({
 
 const response_limit = 8 * 1024 * 1024;
 const retry_delay_ns = 5 * std.time.ns_per_s;
-const product_capacity = 64;
+const product_capacity = settings.product_id_capacity;
 const url_capacity = 768;
 
 pub const Loader = struct {
@@ -39,7 +40,7 @@ pub const Loader = struct {
     }
 
     pub fn request(self: *Loader, product_id: []const u8, url: []const u8) void {
-        if (!validProduct(product_id) or url.len == 0 or url.len >= self.request_url.len) return;
+        if (!settings.validProductId(product_id) or url.len == 0 or url.len >= self.request_url.len) return;
         self.mutex.lock();
         defer self.mutex.unlock();
         if (std.mem.eql(u8, cString(&self.request_product), product_id) and
@@ -262,12 +263,6 @@ fn writeCache(path: []const u8, data: []const u8) void {
     file.close();
     closed = true;
     cwd.rename(temporary, path) catch cwd.deleteFile(temporary) catch {};
-}
-
-fn validProduct(value: []const u8) bool {
-    if (value.len == 0 or value.len >= product_capacity) return false;
-    for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
-    return true;
 }
 
 fn cString(buffer: []const u8) []const u8 {
