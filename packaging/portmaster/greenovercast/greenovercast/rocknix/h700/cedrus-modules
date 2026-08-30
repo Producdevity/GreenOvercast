@@ -30,8 +30,17 @@ supported_release() {
     [ "$(release_value OS_BUILD)" = "official" ] &&
     [ "$(release_value BUILD_ID)" = "3b9cb1f6bf48ee9ca0cf01edd9af52ca2a6b73fb" ] &&
     [ "$(release_value HW_DEVICE)" = "H700" ] &&
-    tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null |
-    grep -qx 'allwinner,sun50i-h700'
+    h700_compatible
+}
+
+h700_compatible() {
+  for compatible_file in /proc/device-tree/compatible /sys/firmware/devicetree/base/compatible; do
+    if [ -r "$compatible_file" ] &&
+      tr '\0' '\n' <"$compatible_file" | grep -qx 'allwinner,sun50i-h700'; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 unload_owned() {

@@ -19,9 +19,13 @@ printf 'Decoder preference: %s\n' "${GREENOVERCAST_VIDEO_DECODER:-auto}"
 
 printf 'Device-tree compatible:\n'
 compatible_found=0
+rockchip_compatible=0
 for compatible_path in /proc/device-tree/compatible /sys/firmware/devicetree/base/compatible; do
   if [ -r "$compatible_path" ]; then
     tr '\0' '\n' <"$compatible_path"
+    if tr '\0' '\n' <"$compatible_path" | grep -q '^rockchip,'; then
+      rockchip_compatible=1
+    fi
     compatible_found=1
     break
   fi
@@ -41,6 +45,7 @@ done
 printf 'MPP plugin: %s\n' "$mpp_plugin"
 if [ ! -f "$mpp_plugin" ]; then
   printf 'MPP plugin status: missing\n'
+  [ "$rockchip_compatible" -eq 0 ] || exit 1
 else
   file "$mpp_plugin" 2>/dev/null || true
   if command -v ldd >/dev/null 2>&1; then
@@ -54,17 +59,24 @@ else
   fi
   if [ -x "$mpp_probe" ]; then
     printf 'MPP firmware probe:\n'
-    if ! GREENOVERCAST_MPP_LIBRARY="$mpp_plugin" \
+    probe_succeeded=0
+    if GREENOVERCAST_MPP_LIBRARY="$mpp_plugin" \
       LD_LIBRARY_PATH="$app_dir:${LD_LIBRARY_PATH:-}" \
       "$mpp_probe"; then
+      probe_succeeded=1
+    else
       if [ -f "$private_mpp_dir/librockchip_mpp.so.1" ]; then
         printf 'MPP private-runtime probe:\n'
-        GREENOVERCAST_MPP_LIBRARY="$mpp_plugin" \
+        if GREENOVERCAST_MPP_LIBRARY="$mpp_plugin" \
           LD_LIBRARY_PATH="$private_mpp_dir:$app_dir:${LD_LIBRARY_PATH:-}" \
-          "$mpp_probe" || true
+          "$mpp_probe"; then
+          probe_succeeded=1
+        fi
       fi
     fi
+    [ "$rockchip_compatible" -eq 0 ] || [ "$probe_succeeded" -eq 1 ] || exit 1
   else
     printf 'MPP probe: missing\n'
+    [ "$rockchip_compatible" -eq 0 ] || exit 1
   fi
 fi

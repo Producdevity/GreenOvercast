@@ -52,11 +52,12 @@ out. Games that return a 16:9 stream remain letterboxed on 4:3 displays.
 | RG40XX-H   | Knulli (Batocera 42)            | Tested |
 | RG40XX-H   | ROCKNIX 20260801                | Tested |
 | Miyoo Flip | SpruceOS 4.2.0                  | Tested |
+| R36S       | AmberELEC prerelease-20250515   | Tested |
 
 Hardware decoding is verified on the H700 systems above. muOS and Knulli use
 CedarX; ROCKNIX 20260801 uses the bundled Cedrus modules. Tested Rockchip builds
-use Rockchip MPP on RK3566 with SpruceOS. Other devices fall back to software
-decoding, which is too slow for normal gameplay.
+use Rockchip MPP on RK3566 with SpruceOS and RK3326 with AmberELEC. Other
+devices fall back to software decoding, which is too slow for normal gameplay.
 
 The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
 supported.

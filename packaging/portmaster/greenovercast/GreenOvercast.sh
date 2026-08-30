@@ -19,6 +19,13 @@ source "$controlfolder/control.txt"
 [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
+# AmberELEC's shared GO-Super mapping exposes R36S R3 as Guide.
+case "$sdl_controllerconfig" in
+190000004b4800000011000000010000,GO-Super\ Gamepad,*guide:b15,*)
+  sdl_controllerconfig=${sdl_controllerconfig/,guide:b15,/,rightstick:b15,guide:b16,}
+  ;;
+esac
+
 GAMEDIR="/$directory/ports/greenovercast"
 cd "$GAMEDIR" || exit 1
 
@@ -47,6 +54,16 @@ credential_dir="$config_dir"
 
 mkdir -p "$config_dir" "$credential_dir" "$artwork_cache_dir" || fail "Unable to create GreenOvercast's storage."
 chmod 700 "$credential_dir" || fail "Unable to protect GreenOvercast's private storage."
+
+if [ "$CFW_NAME" = "knulli" ]; then
+  runtime_credential_dir="${XDG_RUNTIME_DIR:-/var/run}/greenovercast"
+  for private_file in tokens.bin tokens.key h264-parameter-sets.bin catalog.tsv; do
+    if [ ! -e "$credential_dir/$private_file" ] && [ -f "$runtime_credential_dir/$private_file" ]; then
+      cp "$runtime_credential_dir/$private_file" "$credential_dir/$private_file" ||
+        fail "Unable to preserve GreenOvercast's existing session."
+    fi
+  done
+fi
 
 credential_file="$credential_dir/tokens.bin"
 credential_key_file="$credential_dir/tokens.key"
