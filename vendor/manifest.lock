@@ -16,9 +16,24 @@ status = "pinned (host bootstrap via tools/bootstrap.sh; other host platforms re
 source = "https://github.com/allwinner-zh/media-codec"
 commit = "a912bbe300d522e199001bd903bab22e54eff37b"
 license = "LGPLv2.1-or-later (top-level license and source headers)"
-linkage = "dynamic (private .so in app lib dir; replaceable per LGPLv2.1 §6)"
-build = "source-built H.264 decoder plus project-owned H616 /dev/cedar_dev and ION adapter; tools/build-cedarx.sh"
+linkage = "dynamic private library"
+build = "source-built H.264 decoder plus project-owned H616 /dev/cedar_dev and ION adapter; build.zig"
 status = "1280x720 H.264 hardware decode live-cloud proven through Ports on muOS and Knulli"
+
+[dep.rocknix_h700_cedrus]
+version = "Linux 7.0.11 / ROCKNIX 20260801"
+source = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.0.11.tar.xz"
+rocknix_source = "https://github.com/ROCKNIX/distribution"
+rocknix_commit = "3b9cb1f6bf48ee9ca0cf01edd9af52ca2a6b73fb"
+upstream_series = "https://lore.kernel.org/linux-sunxi/20260712030011.3778169-1-wens@kernel.org/"
+license = "GPL-2.0-only"
+linkage = "exact-version kernel modules for stock ROCKNIX H700"
+config_sha256 = "ea1abaf7109d6132e0ecd3cee51d8e08cde5e2143813f017ed35399950482081"
+module_symvers_sha256 = "b95c5a532ae10737d39bac79823e1977db7ec603410b4ab2b77edabc8dd41674"
+overlay_module_sha256 = "dbad85de7238f163cf4985eb017f33866acd21e13015abe7636b2275f9e6b944"
+cedrus_module_sha256 = "ca1bb3534c16c4851cae1ba2ac84632f7e8ba85fa8f43fc253fe215f98d92c32"
+build = "vendor/rocknix-h700-cedrus; tools/build-rocknix-h700-cedrus.sh"
+status = "H.264 V4L2 Request playback and clean unload proven on the official ROCKNIX H700 release"
 
 [dep.rockchip_mpp]
 version = "1.1.0"
@@ -26,8 +41,8 @@ source = "https://github.com/rockchip-linux/mpp"
 commit = "c08762ebfadeb4e986d2fed993bc7a54862d3ebe"
 license = "Apache-2.0 and MIT"
 linkage = "dynamic optional decoder plugin; firmware MPP preferred when compatible"
-build = "git submodule headers and optional private userspace library; tools/build-mpp.sh"
-status = "live cloud playback proven on ROCKNIX; RK3326 dArkOS 4.4 offline 720p decode and frontend startup proven"
+build = "git submodule headers and private userspace library; tools/build-dependencies.sh and build.zig"
+status = "live cloud playback proven on RK3566 SpruceOS 4.2.0; RK3326 dArkOS 4.4 offline 720p decode and frontend startup proven"
 
 [dep.libdatachannel]
 version = "v0.24.3"
@@ -54,13 +69,35 @@ linkage = "static; HTTP and HTTPS only"
 status = "source-built by tools/build-dependencies.sh"
 
 [dep.ffmpeg]
-version = "4.4.8"
-source = "https://ffmpeg.org/releases/ffmpeg-4.4.8.tar.xz"
-sha256 = "c73848c4ae283d9eaee7be3b276affbc3543380483555500d0dd2c9b7e1c39c3"
+version = "9.0"
+source = "https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz"
+sha256 = "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52"
 license = "LGPLv2.1-or-later"
 linkage = "dynamic private libavcodec, libavutil, and libswscale"
-build = "H.264 decoder and parser only; no programs, network support, external libraries, GPL, or nonfree components"
+build = "H.264 and MJPEG decoders, H.264 parser, and H.264 V4L2 request hwaccel; no programs, network support, GPL, or nonfree components"
 status = "source-built by tools/build-dependencies.sh and shipped with the port"
+
+[dep.ffmpeg_v4l2_request]
+source = "https://raw.githubusercontent.com/ROCKNIX/distribution/e9e6b8531df13bc9058ca1771dab5f0c4fd5e98e/packages/multimedia/ffmpeg/patches/v4l2-request/0001-v4l2-request.patch"
+commit = "e9e6b8531df13bc9058ca1771dab5f0c4fd5e98e"
+sha256 = "afd04c202c27081c355d8d34b58a52c4141de26433007e27ed6e0d2093d10d3c"
+license = "LGPLv2.1-or-later"
+status = "pinned patch applied to FFmpeg 9.0"
+
+[dep.libudev_zero]
+version = "1.0.3"
+source = "https://github.com/illiliti/libudev-zero/archive/refs/tags/1.0.3.tar.gz"
+sha256 = "0bd89b657d62d019598e6c7ed726ff8fed80e8ba092a83b484d66afb80b77da5"
+license = "ISC"
+linkage = "static into private libavutil"
+status = "source-built by tools/build-dependencies.sh"
+
+[build.libdrm_headers]
+version = "2.4.128"
+source = "https://dri.freedesktop.org/libdrm/libdrm-2.4.128.tar.xz"
+sha256 = "3bb35db8700c2a0b569f2c6729a53f5495786856b310854c8de57782a22bddac"
+license = "MIT"
+status = "drm.h, drm_fourcc.h, and drm_mode.h used at build time"
 
 [dep.sdl2]
 version = "2.28.5 link-time ABI"

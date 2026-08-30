@@ -14,6 +14,12 @@ pub const LoadResult = enum {
     cancelled,
 };
 
+pub const PickResult = union(enum) {
+    title_id: []const u8,
+    cancelled,
+    sign_out,
+};
+
 pub const Service = struct {
     allocator: std.mem.Allocator,
     titles: ?[]parser.Title = null,
@@ -77,7 +83,7 @@ pub const Service = struct {
         if (self.count == 0) return error.EmptyCatalog;
 
         self.applyCache();
-        try self.fetchMissingNames();
+        try self.fetchMissingMetadata();
         if (c.go_handheld_ui_cancelled(self.uiHandle()) != 0) return .cancelled;
 
         for (titles[0..self.count]) |*title| {
@@ -96,7 +102,7 @@ pub const Service = struct {
         return self.count;
     }
 
-    pub fn pick(self: *Service, requested: []const u8) !?[]const u8 {
+    pub fn pick(self: *Service, requested: []const u8) !PickResult {
         const titles = self.titles orelse return error.NotLoaded;
         if (self.count == 0) return error.EmptyCatalog;
 
@@ -109,12 +115,14 @@ pub const Service = struct {
             @intCast(self.count),
             @ptrCast(&requested_buffer),
         );
-        if (selected < 0) return null;
+        if (selected == c.GO_HANDHELD_UI_PICK_SIGN_OUT) return .sign_out;
+        if (selected == c.GO_HANDHELD_UI_PICK_CANCELLED) return .cancelled;
+        if (selected < 0) return error.InvalidSelection;
         if (selected >= self.count) return error.InvalidSelection;
         const title = &titles[@intCast(selected)];
         const title_id = parser.cString(&title.title_id);
         std.debug.print("Selected title: {s} ({s})\n", .{ titleName(title), title_id });
-        return title_id;
+        return .{ .title_id = title_id };
     }
 
     pub fn destroy(self: *Service) void {
@@ -145,11 +153,15 @@ pub const Service = struct {
             const line = std.mem.trimRight(u8, raw_line, "\r");
             const separator = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
             const product_id = line[0..separator];
-            const name = line[separator + 1 ..];
+            const remainder = line[separator + 1 ..];
+            const artwork_separator = std.mem.indexOfScalar(u8, remainder, '\t');
+            const name = if (artwork_separator) |index| remainder[0..index] else remainder;
+            const artwork = if (artwork_separator) |index| remainder[index + 1 ..] else "";
             if (product_id.len == 0 or name.len == 0) continue;
             for (titles[0..self.count]) |*title| {
                 if (std.mem.eql(u8, parser.cString(&title.product_id), product_id)) {
                     _ = parser.writeCString(&title.name, name);
+                    if (artwork.len > 0) _ = parser.writeCString(&title.artwork_url, artwork);
                     break;
                 }
             }
@@ -172,8 +184,9 @@ pub const Service = struct {
         for (titles[0..self.count]) |*title| {
             const product_id = parser.cString(&title.product_id);
             const name = parser.cString(&title.name);
+            const artwork = parser.cString(&title.artwork_url);
             if (product_id.len > 0 and name.len > 0)
-                try writer.print("{s}\t{s}\n", .{ product_id, name });
+                try writer.print("{s}\t{s}\t{s}\n", .{ product_id, name, artwork });
         }
         try file.sync();
         file.close();
@@ -181,7 +194,7 @@ pub const Service = struct {
         try cwd.rename(temporary_path, path);
     }
 
-    fn fetchMissingNames(self: *Service) !void {
+    fn fetchMissingMetadata(self: *Service) !void {
         const titles = self.titles orelse return;
         var next: usize = 0;
         var resolved: usize = 0;
@@ -190,7 +203,8 @@ pub const Service = struct {
             var batch_count: usize = 0;
             while (next < self.count and batch_count < metadata_batch) : (next += 1) {
                 if (parser.cString(&titles[next].product_id).len > 0 and
-                    parser.cString(&titles[next].name).len == 0)
+                    (parser.cString(&titles[next].name).len == 0 or
+                        parser.cString(&titles[next].artwork_url).len == 0))
                 {
                     indexes[batch_count] = next;
                     batch_count += 1;
@@ -234,7 +248,7 @@ pub const Service = struct {
             var progress_buffer: [64]u8 = undefined;
             const progress = try std.fmt.bufPrintZ(
                 &progress_buffer,
-                "{d} OF {d} NAMES",
+                "{d} OF {d} GAMES",
                 .{ resolved, self.count },
             );
             c.go_handheld_ui_draw_loading(

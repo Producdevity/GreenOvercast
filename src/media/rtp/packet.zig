@@ -13,16 +13,6 @@ pub const Parsed = struct {
     payload: []const u8,
 };
 
-pub const Payload = extern struct {
-    accepted: u32 = 0,
-    marker: u32 = 0,
-    sequence: u16 = 0,
-    reserved: u16 = 0,
-    timestamp: u32 = 0,
-    data: ?[*]const u8 = null,
-    length: usize = 0,
-};
-
 pub const ParseError = error{
     TooShort,
     BadVersion,
@@ -65,25 +55,6 @@ pub fn parse(data: []const u8) ParseError!Parsed {
             .ssrc = std.mem.readInt(u32, data[8..12], .big),
         },
         .payload = payload,
-    };
-}
-
-pub export fn go_rtp_parse_payload(
-    packet: ?[*]const u8,
-    length: usize,
-    expected_payload_type: u8,
-) Payload {
-    if (expected_payload_type > 127) return .{};
-    const bytes = packet orelse return .{};
-    const parsed = parse(bytes[0..length]) catch return .{};
-    if (parsed.header.payload_type != expected_payload_type or parsed.payload.len == 0) return .{};
-    return .{
-        .accepted = 1,
-        .marker = @intFromBool(parsed.header.marker),
-        .sequence = parsed.header.sequence,
-        .timestamp = parsed.header.timestamp,
-        .data = parsed.payload.ptr,
-        .length = parsed.payload.len,
     };
 }
 
@@ -143,21 +114,4 @@ test "reject bad version and padding" {
     var zero_padding = [_]u8{0} ** 13;
     zero_padding[0] = 0xa0;
     try std.testing.expectError(error.BadPadding, parse(&zero_padding));
-}
-
-test "C payload adapter validates payload type" {
-    const data = [_]u8{
-        0x80, 0xe6, 0x00, 0x01,
-        0x00, 0x00, 0x0e, 0x10,
-        0x12, 0x34, 0x56, 0x78,
-        0xaa, 0xbb,
-    };
-
-    const accepted = go_rtp_parse_payload(&data, data.len, 102);
-    const rejected = go_rtp_parse_payload(&data, data.len, 111);
-
-    try std.testing.expectEqual(@as(u32, 1), accepted.accepted);
-    try std.testing.expectEqual(@as(u32, 1), accepted.marker);
-    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb }, accepted.data.?[0..accepted.length]);
-    try std.testing.expectEqual(@as(u32, 0), rejected.accepted);
 }

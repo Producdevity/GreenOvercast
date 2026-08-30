@@ -38,6 +38,48 @@ fn stage(result: release_mod.Result) enum { ok, cancelled, failed } {
     };
 }
 
+const CatalogFlow = enum { ok, cancelled, failed };
+
+fn openCatalog(
+    release: *release_mod.Release,
+    state: *state_mod.State,
+    sign_in_required: bool,
+) CatalogFlow {
+    var needs_sign_in = sign_in_required;
+    var reauth_attempted = sign_in_required;
+    while (true) {
+        if (needs_sign_in) {
+            reauth_attempted = true;
+            needs_sign_in = false;
+            if (!move(state, .auth_begin_sign_in, .device_code_pending)) return .failed;
+            switch (stage(release.deviceSignIn())) {
+                .ok => if (!move(state, .auth_success, .authenticating)) return .failed,
+                .cancelled => return .cancelled,
+                .failed => return .failed,
+            }
+        }
+
+        const auth_result = release.refreshAuth();
+        if (auth_result == .reauth_required and !reauth_attempted) {
+            if (!move(state, .auth_rejected, .signed_out)) return .failed;
+            needs_sign_in = true;
+            continue;
+        }
+        switch (stage(auth_result)) {
+            .ok => if (!move(state, .auth_success, .loading_catalog)) return .failed,
+            .cancelled => return .cancelled,
+            .failed => return .failed,
+        }
+        break;
+    }
+    switch (stage(release.loadCatalog())) {
+        .ok => if (!move(state, .catalog_loaded, .catalog)) return .failed,
+        .cancelled => return .cancelled,
+        .failed => return .failed,
+    }
+    return .ok;
+}
+
 fn runSelectedSession(release: *release_mod.Release, state: *state_mod.State) release_mod.Result {
     var result = release.createSession();
     if (result != .ok) return result;
@@ -81,39 +123,23 @@ pub fn main() u8 {
         return finish(&state, 1);
     }
 
-    var reauth_attempted = false;
-    while (true) {
-        if (needs_sign_in) {
-            reauth_attempted = true;
-            needs_sign_in = false;
-            if (!move(&state, .auth_begin_sign_in, .device_code_pending)) return 1;
-            switch (stage(release.deviceSignIn())) {
-                .ok => if (!move(&state, .auth_success, .authenticating)) return 1,
-                .cancelled => return finish(&state, 0),
-                .failed => return finish(&state, 1),
-            }
-        }
-
-        const auth_result = release.refreshAuth();
-        if (auth_result == .reauth_required and !reauth_attempted) {
-            if (!move(&state, .auth_rejected, .signed_out)) return 1;
-            needs_sign_in = true;
-            continue;
-        }
-        switch (stage(auth_result)) {
-            .ok => if (!move(&state, .auth_success, .loading_catalog)) return 1,
-            .cancelled => return finish(&state, 0),
-            .failed => return finish(&state, 1),
-        }
-        break;
-    }
-    switch (stage(release.loadCatalog())) {
-        .ok => if (!move(&state, .catalog_loaded, .catalog)) return 1,
+    switch (openCatalog(release, &state, needs_sign_in)) {
+        .ok => {},
         .cancelled => return finish(&state, 0),
         .failed => return finish(&state, 1),
     }
     while (true) {
-        switch (stage(release.pickTitle())) {
+        const selection = release.pickTitle();
+        if (selection == .signed_out) {
+            if (release.signOut() != .ok or !move(&state, .auth_sign_out, .signed_out))
+                return finish(&state, 1);
+            switch (openCatalog(release, &state, true)) {
+                .ok => continue,
+                .cancelled => return finish(&state, 0),
+                .failed => return finish(&state, 1),
+            }
+        }
+        switch (stage(selection)) {
             .ok => if (!move(&state, .user_select_title, .provisioning)) return 1,
             .cancelled => return finish(&state, 0),
             .failed => return finish(&state, 1),

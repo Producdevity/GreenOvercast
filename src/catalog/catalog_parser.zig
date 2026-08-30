@@ -3,11 +3,13 @@ const std = @import("std");
 pub const title_id_capacity = 128;
 pub const product_id_capacity = 64;
 pub const name_capacity = 192;
+pub const artwork_url_capacity = 768;
 
 pub const Title = extern struct {
     title_id: [title_id_capacity]u8,
     product_id: [product_id_capacity]u8,
     name: [name_capacity]u8,
+    artwork_url: [artwork_url_capacity]u8,
 };
 
 fn objectString(object: std.json.ObjectMap, key: []const u8) ?[]const u8 {
@@ -150,6 +152,44 @@ fn findString(value: std.json.Value, key: []const u8) ?[]const u8 {
     return null;
 }
 
+fn findImage(value: std.json.Value, purpose: []const u8) ?[]const u8 {
+    switch (value) {
+        .object => |object| {
+            const image_purpose = objectString(object, "ImagePurpose");
+            const uri = objectString(object, "Uri");
+            if (image_purpose != null and uri != null and
+                std.mem.eql(u8, image_purpose.?, purpose)) return uri.?;
+            var iterator = object.iterator();
+            while (iterator.next()) |entry| {
+                if (findImage(entry.value_ptr.*, purpose)) |candidate| return candidate;
+            }
+        },
+        .array => |array| {
+            for (array.items) |item| {
+                if (findImage(item, purpose)) |candidate| return candidate;
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn writeArtworkUrl(destination: []u8, uri: []const u8) bool {
+    @memset(destination, 0);
+    const prefix = if (std.mem.startsWith(u8, uri, "//")) "https:" else "";
+    if (prefix.len == 0 and !std.mem.startsWith(u8, uri, "https://")) return false;
+    const suffix = if (std.mem.indexOfScalar(u8, uri, '?') == null)
+        "?w=320&h=480&format=jpg"
+    else
+        "&w=320&h=480&format=jpg";
+    const length = prefix.len + uri.len + suffix.len;
+    if (length >= destination.len) return false;
+    @memcpy(destination[0..prefix.len], prefix);
+    @memcpy(destination[prefix.len..][0..uri.len], uri);
+    @memcpy(destination[prefix.len + uri.len ..][0..suffix.len], suffix);
+    return true;
+}
+
 pub fn cString(bytes: []const u8) []const u8 {
     return bytes[0 .. std.mem.indexOfScalar(u8, bytes, 0) orelse bytes.len];
 }
@@ -158,14 +198,17 @@ fn applyMetadata(value: std.json.Value, titles: []Title, applied: *usize) void {
     switch (value) {
         .object => |object| {
             if (objectString(object, "ProductId")) |product_id| {
-                if (findString(value, "ProductTitle")) |name| {
-                    for (titles) |*title| {
-                        if (std.mem.eql(u8, cString(&title.product_id), product_id) and
-                            writeDisplayCString(&title.name, name))
-                        {
-                            applied.* += 1;
-                            break;
-                        }
+                for (titles) |*title| {
+                    if (!std.mem.eql(u8, cString(&title.product_id), product_id)) continue;
+                    var changed = false;
+                    if (findString(value, "ProductTitle")) |name|
+                        changed = writeDisplayCString(&title.name, name) or changed;
+                    const artwork = findImage(value, "Poster") orelse findImage(value, "BoxArt");
+                    if (artwork) |uri|
+                        changed = writeArtworkUrl(&title.artwork_url, uri) or changed;
+                    if (changed) {
+                        applied.* += 1;
+                        break;
                     }
                 }
             }
@@ -245,11 +288,18 @@ test "metadata parsing follows nested localized properties" {
     try std.testing.expect(writeCString(&titles[1].product_id, "P2"));
     const fixture =
         \\{"Products":[
-        \\  {"ProductId":"P1","LocalizedProperties":[{"ProductTitle":"Hollow Knight"}]},
+        \\  {"ProductId":"P1","LocalizedProperties":[{"ProductTitle":"Hollow Knight","Images":[
+        \\    {"ImagePurpose":"BoxArt","Uri":"//images.example/box"},
+        \\    {"ImagePurpose":"Poster","Uri":"//images.example/poster"}
+        \\  ]}]},
         \\  {"ProductId":"P2","LocalizedProperties":[{"ProductTitle":"Café\nRacer"}]}
         \\]}
     ;
     try std.testing.expectEqual(@as(usize, 2), try parseMetadata(fixture, &titles));
     try std.testing.expectEqualStrings("Hollow Knight", cString(&titles[0].name));
     try std.testing.expectEqualStrings("Caf? Racer", cString(&titles[1].name));
+    try std.testing.expectEqualStrings(
+        "https://images.example/poster?w=320&h=480&format=jpg",
+        cString(&titles[0].artwork_url),
+    );
 }

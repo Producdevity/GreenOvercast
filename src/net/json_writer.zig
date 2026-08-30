@@ -13,7 +13,7 @@ fn escapedLength(input: []const u8) ?usize {
     return length;
 }
 
-fn escape(input: []const u8, output: []u8) !usize {
+pub fn escape(input: []const u8, output: []u8) !usize {
     const required = escapedLength(input) orelse return error.Overflow;
     if (output.len < required + 1) return error.NoSpace;
     var cursor: usize = 0;
@@ -44,14 +44,6 @@ fn escape(input: []const u8, output: []u8) !usize {
     }
     output[cursor] = 0;
     return cursor;
-}
-
-export fn go_json_escape_string(input: ?[*]const u8, input_length: usize, output: ?[*]u8, output_capacity: usize) callconv(.c) c_int {
-    const input_pointer = input orelse return -1;
-    const output_pointer = output orelse return -1;
-    const length = escape(input_pointer[0..input_length], output_pointer[0..output_capacity]) catch
-        return -1;
-    return std.math.cast(c_int, length) orelse -1;
 }
 
 test "escapes JSON string content and terminates it" {

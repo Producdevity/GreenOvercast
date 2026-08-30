@@ -37,6 +37,8 @@ fn isArm() c_int {
 fn backendName(backend: c.GoVideoDecoderBackend) []const u8 {
     return if (backend == c.GO_VIDEO_DECODER_BACKEND_MPP)
         "mpp"
+    else if (backend == c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST)
+        "v4l2-request"
     else if (backend == c.GO_VIDEO_DECODER_BACKEND_CEDAR)
         "cedar"
     else if (backend == c.GO_VIDEO_DECODER_BACKEND_SOFTWARE)
@@ -67,6 +69,14 @@ fn createBackend(
             error_buffer.len,
         );
     }
+    if (backend == c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST) {
+        return c.go_video_decoder_v4l2_request_create(
+            config.max_width,
+            config.max_height,
+            error_buffer,
+            error_buffer.len,
+        );
+    }
     if (backend == c.GO_VIDEO_DECODER_BACKEND_SOFTWARE) {
         return c.go_video_decoder_ffmpeg_create(error_buffer, error_buffer.len);
     }
@@ -88,7 +98,7 @@ pub export fn go_video_decoder_selection_create(
     output.* = std.mem.zeroes(c.GoVideoDecoderSelection);
     if (settings.max_width <= 0 or settings.max_height <= 0 or
         settings.max_width > 8192 or settings.max_height > 8192 or
-        settings.preference > c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE)
+        settings.preference > c.GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST)
     {
         writeError(error_output, error_capacity, "invalid video decoder configuration");
         return -1;
@@ -97,7 +107,7 @@ pub export fn go_video_decoder_selection_create(
     var compatible: [4096]u8 = undefined;
     const compatible_length = readCompatible(&compatible);
     const platform = c.go_video_decoder_platform(&compatible, compatible_length, isArm());
-    var candidates: [3]c.GoVideoDecoderBackend = undefined;
+    var candidates: [4]c.GoVideoDecoderBackend = undefined;
     const candidate_count = c.go_video_decoder_candidate_order(
         settings.preference,
         platform,

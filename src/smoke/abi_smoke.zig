@@ -1,10 +1,3 @@
-// M0 ABI smoke: proves the pinned Zig toolchain against the exact target
-// kernel/libc before any product code is accepted.
-//
-// Each case prints `SMOKE <name> ok|fail <detail>`; the process exits non-zero
-// if any case fails. The syscall table reports presence, not failure: platform
-// code must consult it instead of assuming post-4.9 syscalls.
-
 const std = @import("std");
 const linux = std.os.linux;
 const posix = std.posix;
@@ -15,9 +8,7 @@ extern fn gnu_get_libc_version() [*:0]const u8;
 
 const stdout = std.io.getStdOut().writer();
 
-// On kernel 4.9 the default panic handler loops forever: dumping a stack
-// trace touches self debug info via std.fs.File.stat() → statx → ENOSYS →
-// panic recursion. Minimal handler: report and abort.
+// Zig's default panic path calls statx, which is unavailable on kernel 4.9.
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     stdout.print("SMOKE panic: {s}\n", .{msg}) catch {};
     posix.abort();
@@ -92,8 +83,6 @@ fn caseFileIo() !void {
     }
     try dir.rename(tmp, final);
     defer dir.deleteFile(final) catch {};
-    // No std stat helpers anywhere: std.fs.File.stat() panics on kernel 4.9
-    // (unconditional statx). Bounded raw read instead.
     const f = try dir.openFile(final, .{});
     defer f.close();
     var buf: [64]u8 = undefined;

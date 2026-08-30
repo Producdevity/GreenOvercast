@@ -11,12 +11,14 @@ enum {
     GO_CATALOG_TITLE_ID_CAPACITY = 128,
     GO_CATALOG_PRODUCT_ID_CAPACITY = 64,
     GO_CATALOG_NAME_CAPACITY = 192,
+    GO_CATALOG_ARTWORK_URL_CAPACITY = 768,
 };
 
 typedef struct {
     char title_id[GO_CATALOG_TITLE_ID_CAPACITY];
     char product_id[GO_CATALOG_PRODUCT_ID_CAPACITY];
     char name[GO_CATALOG_NAME_CAPACITY];
+    char artwork_url[GO_CATALOG_ARTWORK_URL_CAPACITY];
 } GoCatalogTitle;
 
 // Display name for a title, falling back to its id when no name is set.

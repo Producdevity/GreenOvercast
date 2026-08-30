@@ -20,6 +20,7 @@ pub const Result = enum {
     session_ended,
     missing_credentials,
     reauth_required,
+    signed_out,
     failed,
 };
 
@@ -246,12 +247,28 @@ pub const Release = struct {
     pub fn pickTitle(self: *Release) Result {
         if (self.catalog == null) return .failed;
         const requested = std.mem.sliceTo(&self.requested_title, 0);
-        const title_id = self.catalog.?.pick(requested) catch return .failed;
+        const selection = self.catalog.?.pick(requested) catch return .failed;
         @memset(&self.requested_title, 0);
-        const selected = title_id orelse return .cancelled;
+        const selected = switch (selection) {
+            .title_id => |value| value,
+            .cancelled => return .cancelled,
+            .sign_out => return .signed_out,
+        };
         if (selected.len >= self.title_id.len) return .failed;
         @memset(&self.title_id, 0);
         @memcpy(self.title_id[0..selected.len], selected);
+        return .ok;
+    }
+
+    pub fn signOut(self: *Release) Result {
+        self.drawLoading("SIGNING OUT", "REMOVING XBOX CREDENTIALS", null);
+        if (c.go_xbox_auth_sign_out(self.auth) != 0) {
+            std.debug.print("Xbox credentials could not be removed\n", .{});
+            return .failed;
+        }
+        if (self.catalog) |catalog| catalog.destroy();
+        self.catalog = null;
+        @memset(&self.title_id, 0);
         return .ok;
     }
 
@@ -300,10 +317,6 @@ pub const Release = struct {
         debug("Setting up WebRTC\n", .{});
         const stream_width = c.go_handheld_ui_stream_width(self.ui());
         const stream_height = c.go_handheld_ui_stream_height(self.ui());
-        if (stream_width * 3 == stream_height * 4)
-            c.go_video_pipeline_set_crop_aspect(self.video, stream_width, stream_height)
-        else
-            c.go_video_pipeline_set_crop_aspect(self.video, 0, 0);
         self.webrtc = c.go_webrtc_session_create(
             self.cloud,
             self.video,
@@ -430,7 +443,7 @@ pub const Release = struct {
         const audio = c.go_audio_pipeline_stats(self.audio);
         const cloud = c.go_cloud_session_stats(self.cloud);
         std.debug.print(
-            "[{d}s] video_rtp={d} payload={d} rejected={d}/pt{d} aus={d} frames={d}/{d} " ++
+            "[{d}s] video_rtp={d} payload={d} rejected={d}/pt{d} aus={d} frames={d}/{d} source={d}x{d} " ++
                 "nals={d}/{d}/{d}/{d} ts={d} synced={d} gaps={d} missing={d} late_rtp={d} " ++
                 "decoder={d} init_failures={d} fallbacks={d} backpressure={d} corrupt={d} " ++
                 "info_changes={d} decode_errors={d}/{d}/{d} keyframes={d} queue={d}/{d}\n",
@@ -443,6 +456,8 @@ pub const Release = struct {
                 video.access_units,
                 video.decoded_frames,
                 video.rendered_frames,
+                video.source_width,
+                video.source_height,
                 video.frame_nals,
                 video.idr_nals,
                 video.parameter_nals,

@@ -88,40 +88,18 @@ fn findUnsigned(
     return null;
 }
 
-fn parseString(data: []const u8, key: []const u8, output: []u8) !usize {
+pub fn parseString(data: []const u8, key: []const u8, output: []u8) !usize {
     const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, data, .{});
     defer parsed.deinit();
     return try copyMatchingString(std.heap.page_allocator, parsed.value, key, output, 0) orelse
         error.MissingField;
 }
 
-fn parseUnsigned(data: []const u8, key: []const u8) !u32 {
+pub fn parseUnsigned(data: []const u8, key: []const u8) !u32 {
     const parsed = try std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, data, .{});
     defer parsed.deinit();
     return try findUnsigned(std.heap.page_allocator, parsed.value, key, 0) orelse
         error.MissingField;
-}
-
-export fn go_json_copy_string(
-    data: [*]const u8,
-    length: usize,
-    key: [*:0]const u8,
-    output: [*]u8,
-    capacity: usize,
-) c_int {
-    const copied = parseString(data[0..length], std.mem.span(key), output[0..capacity]) catch
-        return -1;
-    return @intCast(copied);
-}
-
-export fn go_json_unsigned(
-    data: [*]const u8,
-    length: usize,
-    key: [*:0]const u8,
-    output: *c_uint,
-) c_int {
-    output.* = parseUnsigned(data[0..length], std.mem.span(key)) catch return -1;
-    return 0;
 }
 
 test "copies decoded strings from direct and embedded JSON" {

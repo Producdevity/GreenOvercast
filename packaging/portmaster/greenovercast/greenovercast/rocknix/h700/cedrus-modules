@@ -1,0 +1,93 @@
+#!/bin/sh
+set -u
+
+action=${1:?usage: cedrus-modules load|unload}
+state_file=/run/greenovercast-rocknix-h700-modules.loaded
+module_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+overlay_module="$module_dir/greenovercast_h700_overlay.ko"
+cedrus_module="$module_dir/sunxi-cedrus.ko"
+
+module_loaded() {
+  grep -q "^$1 " /proc/modules 2>/dev/null
+}
+
+cedrus_available() {
+  for name_file in /sys/class/video4linux/video*/name; do
+    [ -r "$name_file" ] && [ "$(cat "$name_file")" = "cedrus" ] && return 0
+  done
+  return 1
+}
+
+release_value() {
+  sed -n "s/^$1=\"\(.*\)\"$/\1/p" /etc/os-release 2>/dev/null
+}
+
+supported_release() {
+  [ "$(uname -m)" = "aarch64" ] &&
+    [ "$(uname -r)" = "7.0.11" ] &&
+    [ "$(release_value OS_NAME)" = "ROCKNIX" ] &&
+    [ "$(release_value OS_VERSION)" = "20260801" ] &&
+    [ "$(release_value OS_BUILD)" = "official" ] &&
+    [ "$(release_value BUILD_ID)" = "3b9cb1f6bf48ee9ca0cf01edd9af52ca2a6b73fb" ] &&
+    [ "$(release_value HW_DEVICE)" = "H700" ] &&
+    tr '\0' '\n' </proc/device-tree/compatible 2>/dev/null |
+    grep -qx 'allwinner,sun50i-h700'
+}
+
+unload_owned() {
+  [ -f "$state_file" ] || return 0
+  if module_loaded sunxi_cedrus && ! rmmod sunxi_cedrus; then
+    return 1
+  fi
+  if module_loaded greenovercast_h700_overlay && ! rmmod greenovercast_h700_overlay; then
+    return 1
+  fi
+  rm -f "$state_file"
+}
+
+case "$action" in
+load)
+  if cedrus_available; then
+    exit 0
+  fi
+  if ! supported_release; then
+    echo "ROCKNIX H700 Cedrus modules do not match this firmware; using decoder fallback."
+    exit 0
+  fi
+
+  if [ -f "$state_file" ]; then
+    unload_owned || exit 1
+  elif module_loaded greenovercast_h700_overlay || module_loaded sunxi_cedrus; then
+    echo "Existing Cedrus modules are unavailable; using decoder fallback."
+    exit 0
+  fi
+
+  [ -r "$overlay_module" ] && [ -r "$cedrus_module" ] || {
+    echo "ROCKNIX H700 Cedrus modules are missing." >&2
+    exit 1
+  }
+  insmod "$overlay_module" || exit 1
+  if ! insmod "$cedrus_module"; then
+    rmmod greenovercast_h700_overlay 2>/dev/null || true
+    exit 1
+  fi
+  if ! cedrus_available; then
+    rmmod sunxi_cedrus 2>/dev/null || true
+    rmmod greenovercast_h700_overlay 2>/dev/null || true
+    echo "ROCKNIX H700 Cedrus did not register a video device." >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$(release_value BUILD_ID)" >"$state_file"; then
+    rmmod sunxi_cedrus 2>/dev/null || true
+    rmmod greenovercast_h700_overlay 2>/dev/null || true
+    exit 1
+  fi
+  ;;
+unload)
+  unload_owned
+  ;;
+*)
+  echo "usage: cedrus-modules load|unload" >&2
+  exit 2
+  ;;
+esac

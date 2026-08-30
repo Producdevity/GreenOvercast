@@ -28,6 +28,8 @@ pub export fn go_video_decoder_preference_parse(
         c.GO_VIDEO_DECODER_PREFERENCE_CEDAR
     else if (std.mem.eql(u8, name, "software"))
         c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE
+    else if (std.mem.eql(u8, name, "v4l2") or std.mem.eql(u8, name, "v4l2-request"))
+        c.GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST
     else
         return -1;
     return 0;
@@ -60,7 +62,7 @@ pub export fn go_video_decoder_candidate_order(
     output: ?[*]c.GoVideoDecoderBackend,
     capacity: usize,
 ) usize {
-    var candidates: [3]c.GoVideoDecoderBackend = undefined;
+    var candidates: [4]c.GoVideoDecoderBackend = undefined;
     var count: usize = 0;
 
     if (preference == c.GO_VIDEO_DECODER_PREFERENCE_MPP) {
@@ -72,12 +74,19 @@ pub export fn go_video_decoder_candidate_order(
     } else if (preference == c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE) {
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_SOFTWARE;
         count += 1;
+    } else if (preference == c.GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST) {
+        candidates[count] = c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST;
+        count += 1;
     } else if (platform == c.GO_VIDEO_PLATFORM_ROCKCHIP) {
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_MPP;
+        count += 1;
+        candidates[count] = c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST;
         count += 1;
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_SOFTWARE;
         count += 1;
     } else if (platform == c.GO_VIDEO_PLATFORM_ALLWINNER) {
+        candidates[count] = c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST;
+        count += 1;
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_CEDAR;
         count += 1;
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_SOFTWARE;
@@ -87,6 +96,8 @@ pub export fn go_video_decoder_candidate_order(
         count += 1;
     } else {
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_MPP;
+        count += 1;
+        candidates[count] = c.GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST;
         count += 1;
         candidates[count] = c.GO_VIDEO_DECODER_BACKEND_CEDAR;
         count += 1;

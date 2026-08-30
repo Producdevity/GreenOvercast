@@ -13,6 +13,11 @@ extern "C" {
 typedef struct GoHandheldUi GoHandheldUi;
 typedef int (*GoUiStopRequested)(void* context);
 
+enum {
+    GO_HANDHELD_UI_PICK_CANCELLED = -1,
+    GO_HANDHELD_UI_PICK_SIGN_OUT = -2,
+};
+
 GoHandheldUi* go_handheld_ui_create(SDL_Renderer* renderer, GoControllerInput* controller,
                                     GoUiStopRequested stop_requested, void* stop_context);
 void go_handheld_ui_destroy(GoHandheldUi* ui);

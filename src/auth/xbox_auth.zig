@@ -1,11 +1,11 @@
 const std = @import("std");
+const form = @import("form_writer");
+const json = @import("json_reader");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
-    @cInclude("form_writer.h");
     @cInclude("handheld_ui.h");
     @cInclude("http_client.h");
-    @cInclude("json_reader.h");
     @cInclude("token_store_adapter.h");
 });
 
@@ -91,14 +91,7 @@ fn buildForm(output: []u8, fields: []const FormField) ![:0]u8 {
             .{ if (index == 0) "" else "&", field.key },
         );
         used += prefix.len;
-        const encoded = c.go_form_urlencode(
-            field.value.ptr,
-            field.value.len,
-            output[used..].ptr,
-            output.len - used,
-        );
-        if (encoded < 0) return error.NoSpaceLeft;
-        used += @intCast(encoded);
+        used += form.encode(field.value, output[used..]) catch return error.NoSpaceLeft;
     }
     if (used >= output.len) return error.NoSpaceLeft;
     output[used] = 0;
@@ -110,15 +103,13 @@ fn responseData(response: [*c]c.GoHttpResponse) ?[]const u8 {
     return response.*.data[0..response.*.len];
 }
 
-fn jsonString(data: []const u8, key: [*:0]const u8, output: []u8) ![]const u8 {
-    const length = c.go_json_copy_string(data.ptr, data.len, key, output.ptr, output.len);
-    if (length < 0) return error.MissingField;
-    return output[0..@intCast(length)];
+fn jsonString(data: []const u8, key: []const u8, output: []u8) ![]const u8 {
+    const length = json.parseString(data, key, output) catch return error.MissingField;
+    return output[0..length];
 }
 
-fn jsonUnsigned(data: []const u8, key: [*:0]const u8, fallback: c_uint) c_uint {
-    var value: c_uint = 0;
-    return if (c.go_json_unsigned(data.ptr, data.len, key, &value) == 0) value else fallback;
+fn jsonUnsigned(data: []const u8, key: []const u8, fallback: c_uint) c_uint {
+    return json.parseUnsigned(data, key) catch fallback;
 }
 
 fn requiresSignIn(response: [*c]c.GoHttpResponse) bool {
@@ -488,6 +479,18 @@ pub export fn go_xbox_auth_device_sign_in(auth: ?*Auth, ui: ?*c.GoHandheldUi) c_
 
 pub export fn go_xbox_auth_refresh(auth: ?*Auth) c_int {
     return refresh(auth orelse return auth_failed) catch auth_failed;
+}
+
+pub export fn go_xbox_auth_sign_out(auth: ?*Auth) c_int {
+    const handle = auth orelse return -1;
+    std.crypto.secureZero(u8, &handle.gssv_token);
+    std.crypto.secureZero(u8, &handle.user_token);
+    std.crypto.secureZero(u8, &handle.refresh_token);
+    std.crypto.secureZero(u8, &handle.passport_token);
+    return c.go_token_store_delete(
+        @ptrCast(&handle.token_path),
+        @ptrCast(&handle.token_key_path),
+    );
 }
 
 pub export fn go_xbox_auth_gssv_token(auth: ?*const Auth) [*c]const u8 {

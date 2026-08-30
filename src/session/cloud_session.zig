@@ -1,20 +1,22 @@
 const std = @import("std");
+const json = @import("json_reader");
 
 const c = @cImport({
     @cInclude("handheld_ui.h");
     @cInclude("http_client.h");
-    @cInclude("json_reader.h");
     @cInclude("xbox_auth.h");
 });
 
 const base_url = "https://weu.core.gssv-play-prod.xboxlive.com";
-const device_info_header =
+const device_info_prefix =
     "X-MS-Device-Info: {\"appInfo\":{\"env\":{\"clientAppId\":\"www.xbox.com\"," ++
     "\"clientAppType\":\"browser\",\"clientAppVersion\":\"26.1.97\"," ++
     "\"clientSdkVersion\":\"10.3.7\",\"httpEnvironment\":\"prod\",\"sdkInstallId\":\"\"}}," ++
     "\"dev\":{\"hw\":{\"make\":\"Microsoft\",\"model\":\"unknown\",\"sdktype\":\"web\"}," ++
     "\"os\":{\"name\":\"android\",\"ver\":\"22631.2715\",\"platform\":\"desktop\"}," ++
-    "\"displayInfo\":{\"dimensions\":{\"widthInPixels\":1280,\"heightInPixels\":720}," ++
+    "\"displayInfo\":{\"dimensions\":{\"widthInPixels\":";
+const device_info_between_dimensions = ",\"heightInPixels\":";
+const device_info_suffix = "}," ++
     "\"pixelDensity\":{\"dpiX\":1,\"dpiY\":1}},\"browser\":{\"browserName\":\"chrome\"," ++
     "\"browserVersion\":\"140.0.3485.54\"}}}";
 
@@ -49,10 +51,9 @@ fn responseData(response: [*c]c.GoHttpResponse) ?[]const u8 {
     return response.*.data[0..response.*.len];
 }
 
-fn jsonString(data: []const u8, key: [*:0]const u8, output: []u8) ![]const u8 {
-    const length = c.go_json_copy_string(data.ptr, data.len, key, output.ptr, output.len);
-    if (length < 0) return error.MissingField;
-    return output[0..@intCast(length)];
+fn jsonString(data: []const u8, key: []const u8, output: []u8) ![]const u8 {
+    const length = try json.parseString(data, key, output);
+    return output[0..length];
 }
 
 fn debug(comptime format: []const u8, args: anytype) void {
@@ -76,11 +77,23 @@ fn request(
         "Authorization: Bearer {s}",
         .{token},
     ) catch return null;
+    var device_info_buffer: [1024]u8 = undefined;
+    const device_info_header = std.fmt.bufPrintZ(
+        &device_info_buffer,
+        "{s}{d}{s}{d}{s}",
+        .{
+            device_info_prefix,
+            c.go_handheld_ui_stream_width(session.ui),
+            device_info_between_dimensions,
+            c.go_handheld_ui_stream_height(session.ui),
+            device_info_suffix,
+        },
+    ) catch return null;
     var headers: [8][*c]const u8 = undefined;
     headers[0] = auth_header.ptr;
     headers[1] = "Accept: application/json";
     headers[2] = "x-gssv-client: XboxComBrowser";
-    headers[3] = device_info_header;
+    headers[3] = device_info_header.ptr;
     var header_count: usize = 4;
     var index: usize = 0;
     while (index < @as(usize, @intCast(extra_header_count))) : (index += 1) {
