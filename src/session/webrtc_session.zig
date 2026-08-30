@@ -283,6 +283,7 @@ fn onMessageChannel(_: c_int, data: [*c]const u8, size: c_int, context: ?*anyopa
     }
     if (std.mem.indexOf(u8, message[0..copy_length], "HandshakeAck") == null) return;
     session.handshake_complete.store(true, .release);
+    // This fixed access key is part of the Xbox streaming control protocol.
     _ = c.rtcSendMessage(
         session.control_channel,
         "{\"message\":\"authorizationRequest\"," ++
