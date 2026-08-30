@@ -307,16 +307,15 @@ fi
 
 if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
   ffmpeg_build="$BUILDS/ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
-  ffmpeg_source="$SOURCES/ffmpeg-9.0"
+  ffmpeg_source="$BUILDS/ffmpeg-9.0"
   ffmpeg_request_patch="$DOWNLOADS/ffmpeg-9.0-v4l2-request.patch"
   ffmpeg_portable_patch="$ROOT/vendor/patches/ffmpeg-9.0-v4l2-request-portable.patch"
-  if [ ! -f "$ffmpeg_source/.greenovercast-v4l2-request-patched" ]; then
-    patch -d "$ffmpeg_source" -p1 <"$ffmpeg_request_patch"
-    patch -d "$ffmpeg_source" -p1 <"$ffmpeg_portable_patch"
-    find "$ffmpeg_source" -name '*.orig' -delete
-    : >"$ffmpeg_source/.greenovercast-v4l2-request-patched"
-  fi
+  rm -rf "$ffmpeg_build" "$ffmpeg_source"
   mkdir -p "$ffmpeg_build"
+  tar -xf "$DOWNLOADS/ffmpeg-9.0.tar.xz" -C "$BUILDS"
+  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_request_patch"
+  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_portable_patch"
+  find "$ffmpeg_source" -name '*.orig' -delete
   nm_tool=$(command -v llvm-nm || command -v nm)
   (
     cd "$ffmpeg_build"
@@ -376,7 +375,8 @@ if [ ! -f "$LIBDATACHANNEL_BUILD/.greenovercast-$LIBDATACHANNEL_COMMIT" ]; then
   restore_libdatachannel() {
     git -C "$LIBDATACHANNEL_SOURCE" apply --reverse "$LIBDATACHANNEL_PATCH"
   }
-  trap restore_libdatachannel EXIT HUP INT TERM
+  trap restore_libdatachannel EXIT
+  trap 'exit 1' HUP INT TERM
 
   cmake_fresh=
   if [ -f "$LIBDATACHANNEL_BUILD/CMakeCache.txt" ]; then

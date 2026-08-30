@@ -45,28 +45,41 @@ done
 }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/greenovercast-h700-cedrus.XXXXXX")
-applied_patches=
+match_patch_applied=0
+sram_patch_applied=0
 cleanup() {
-  for patch_file in $applied_patches; do
-    patch -R -s -d "$KERNEL_TREE" -p1 <"$patch_file"
-  done
-  rm -rf "$work"
+  status=$?
+  trap - EXIT
+  if [ "$sram_patch_applied" -ne 0 ]; then
+    patch -R -s -d "$KERNEL_TREE" -p1 <"$SOURCE_DIR/cedrus-h616-sram.patch" || status=1
+  fi
+  if [ "$match_patch_applied" -ne 0 ]; then
+    patch -R -s -d "$KERNEL_TREE" -p1 <"$SOURCE_DIR/cedrus-h616-match.patch" || status=1
+  fi
+  rm -rf "$work" || status=1
+  exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 apply_if_needed() {
   patch_file=$1
   if patch --batch --forward -s --dry-run -d "$KERNEL_TREE" -p1 <"$patch_file"; then
     patch --batch --forward -s -d "$KERNEL_TREE" -p1 <"$patch_file"
-    applied_patches="$patch_file $applied_patches"
+    return 0
   elif ! patch --batch -R -s --dry-run -d "$KERNEL_TREE" -p1 <"$patch_file"; then
     echo "patch does not match the prepared kernel tree: $patch_file" >&2
     exit 1
   fi
+  return 1
 }
 
-apply_if_needed "$SOURCE_DIR/cedrus-h616-match.patch"
-apply_if_needed "$SOURCE_DIR/cedrus-h616-sram.patch"
+if apply_if_needed "$SOURCE_DIR/cedrus-h616-match.patch"; then
+  match_patch_applied=1
+fi
+if apply_if_needed "$SOURCE_DIR/cedrus-h616-sram.patch"; then
+  sram_patch_applied=1
+fi
 
 make -C "$KERNEL_TREE" ARCH=arm64 M=drivers/staging/media/sunxi/cedrus modules
 

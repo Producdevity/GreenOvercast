@@ -175,6 +175,7 @@ fn addReleaseArtifacts(
 
     for (release_zig_roots) |root| {
         const object = addReleaseZigObject(b, target, optimize, root.name, root.path, root.imports);
+        object.step.dependOn(&native_dependencies.step);
         main_module.addObject(object);
     }
 

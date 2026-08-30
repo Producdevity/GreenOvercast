@@ -53,7 +53,8 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/greenovercast-port.XXXXXX")
 cleanup() {
   rm -rf "$stage"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 checker="$stage/PortMaster-New"
 port="$checker/ports/greenovercast"
