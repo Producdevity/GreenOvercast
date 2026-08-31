@@ -198,8 +198,8 @@ fn drawMappingExplanation(renderer: *c.SDL_Renderer, mode: settings.FaceButtonMo
         font.text(renderer, 390, 208, 2, "BUTTON MAP", style.muted());
     } else {
         font.text(renderer, 390, 142, 2, "SWAPPED", style.bright());
-        font.text(renderer, 390, 180, 2, "A <-> B", style.accent());
-        font.text(renderer, 390, 208, 2, "X <-> Y", style.accent());
+        font.text(renderer, 390, 180, 2, "A / B", style.accent());
+        font.text(renderer, 390, 208, 2, "X / Y", style.accent());
     }
 }
 
