@@ -18,7 +18,7 @@ pub const Result = enum {
 const StopRequested = ?*const fn (?*anyopaque) callconv(.c) c_int;
 
 const Row = enum {
-    face_layout,
+    face_buttons,
     artwork,
     sign_out,
 };
@@ -32,7 +32,7 @@ pub fn run(
 ) Result {
     const renderer: *c.SDL_Renderer = @ptrCast(@alignCast(renderer_pointer));
     const controller: *c.GoControllerInput = @ptrCast(@alignCast(controller_pointer));
-    var selected = Row.face_layout;
+    var selected = Row.face_buttons;
     var repeat = navigation.Repeater{};
     var axis_latch = navigation.AxisLatch{};
     var dirty = true;
@@ -108,11 +108,11 @@ fn activate(
     store: *settings.Store,
 ) bool {
     switch (row) {
-        .face_layout => {
-            store.face_layout = if (store.face_layout == .xbox) .nintendo else .xbox;
-            c.go_controller_input_set_face_layout(
+        .face_buttons => {
+            store.face_buttons = if (store.face_buttons == .system) .swapped else .system;
+            c.go_controller_input_set_face_button_mode(
                 controller,
-                if (store.face_layout == .xbox) c.GO_FACE_BUTTON_LAYOUT_XBOX else c.GO_FACE_BUTTON_LAYOUT_NINTENDO,
+                if (store.face_buttons == .system) c.GO_FACE_BUTTON_MODE_SYSTEM else c.GO_FACE_BUTTON_MODE_SWAPPED,
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
@@ -124,17 +124,17 @@ fn activate(
 
 fn previousRow(row: Row) Row {
     return switch (row) {
-        .face_layout => .sign_out,
-        .artwork => .face_layout,
+        .face_buttons => .sign_out,
+        .artwork => .face_buttons,
         .sign_out => .artwork,
     };
 }
 
 fn nextRow(row: Row) Row {
     return switch (row) {
-        .face_layout => .artwork,
+        .face_buttons => .artwork,
         .artwork => .sign_out,
-        .sign_out => .face_layout,
+        .sign_out => .face_buttons,
     };
 }
 
@@ -162,13 +162,12 @@ fn draw(
     _ = c.SDL_RenderFillRect(renderer, &footer);
     font.text(renderer, 18, 14, 4, "SETTINGS", style.bright());
 
-    drawRow(renderer, 92, "FACE BUTTONS", if (store.face_layout == .xbox) "XBOX" else "NINTENDO", selected == .face_layout);
+    drawRow(renderer, 92, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
     drawRow(renderer, 148, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
     drawRow(renderer, 204, "ACCOUNT", "SIGN OUT", selected == .sign_out);
 
-    font.text(renderer, 390, 96, 2, "BUTTON POSITIONS", style.muted());
-    drawButtonDiagram(renderer, store.face_layout);
-    font.text(renderer, 18, 340, 2, "CHOOSE THE LAYOUT SHOWN ON YOUR DEVICE", style.muted());
+    drawMappingExplanation(renderer, store.face_buttons);
+    font.text(renderer, 18, 340, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
     font.text(renderer, 16, 438, 2, "A CHANGE   DPAD MOVE   B BACK", style.bright());
     c.SDL_RenderPresent(renderer);
 }
@@ -191,22 +190,16 @@ fn selectedColor(selected: bool) style.Color {
     return if (selected) style.bright() else style.muted();
 }
 
-fn drawButtonDiagram(renderer: *c.SDL_Renderer, layout: settings.FaceLayout) void {
-    const labels = if (layout == .xbox)
-        [_][*:0]const u8{ "Y", "X", "B", "A" }
-    else
-        [_][*:0]const u8{ "X", "Y", "A", "B" };
-    const positions = [_]struct { c_int, c_int }{
-        .{ 500, 136 },
-        .{ 450, 180 },
-        .{ 550, 180 },
-        .{ 500, 224 },
-    };
-    for (positions, labels) |position, label| {
-        style.setColor(renderer, style.selection());
-        var button = c.SDL_Rect{ .x = position[0] - 16, .y = position[1] - 16, .w = 32, .h = 32 };
-        _ = c.SDL_RenderFillRect(renderer, &button);
-        font.text(renderer, position[0] - 5, position[1] - 8, 2, label, style.bright());
+fn drawMappingExplanation(renderer: *c.SDL_Renderer, mode: settings.FaceButtonMode) void {
+    font.text(renderer, 390, 96, 2, "INPUT MAPPING", style.muted());
+    if (mode == .system) {
+        font.text(renderer, 390, 142, 2, "SYSTEM", style.bright());
+        font.text(renderer, 390, 180, 2, "USE CFW", style.muted());
+        font.text(renderer, 390, 208, 2, "BUTTON MAP", style.muted());
+    } else {
+        font.text(renderer, 390, 142, 2, "SWAPPED", style.bright());
+        font.text(renderer, 390, 180, 2, "A <-> B", style.accent());
+        font.text(renderer, 390, 208, 2, "X <-> Y", style.accent());
     }
 }
 

@@ -3,9 +3,9 @@ const std = @import("std");
 pub const max_games = 1024;
 pub const product_id_capacity = 64;
 
-pub const FaceLayout = enum {
-    xbox,
-    nintendo,
+pub const FaceButtonMode = enum {
+    system,
+    swapped,
 };
 
 pub const GameSettings = struct {
@@ -16,7 +16,7 @@ pub const GameSettings = struct {
 pub const Store = struct {
     path: [512]u8 = [_]u8{0} ** 512,
     path_length: usize = 0,
-    face_layout: FaceLayout = .xbox,
+    face_buttons: FaceButtonMode = .system,
     artwork_enabled: bool = true,
     games: [max_games]GameSettings = [_]GameSettings{.{}} ** max_games,
     game_count: usize = 0,
@@ -68,7 +68,7 @@ pub const Store = struct {
         defer if (!closed) file.close();
         var writer = file.writer();
         try writer.writeAll("version\t1\n");
-        try writer.print("face_layout\t{s}\n", .{@tagName(self.face_layout)});
+        try writer.print("face_buttons\t{s}\n", .{@tagName(self.face_buttons)});
         try writer.print("artwork\t{d}\n", .{@intFromBool(self.artwork_enabled)});
         for (self.games[0..self.game_count]) |*entry| {
             try writer.print("game\t{s}\t{d}\n", .{
@@ -111,10 +111,10 @@ pub const Store = struct {
             }
             if (std.mem.eql(u8, kind, "version")) {
                 return error.UnsupportedSettings;
-            } else if (std.mem.eql(u8, kind, "face_layout")) {
+            } else if (std.mem.eql(u8, kind, "face_buttons")) {
                 const value = fields.next() orelse continue;
-                if (std.mem.eql(u8, value, "xbox")) self.face_layout = .xbox;
-                if (std.mem.eql(u8, value, "nintendo")) self.face_layout = .nintendo;
+                if (std.mem.eql(u8, value, "system")) self.face_buttons = .system;
+                if (std.mem.eql(u8, value, "swapped")) self.face_buttons = .swapped;
             } else if (std.mem.eql(u8, kind, "artwork")) {
                 const value = fields.next() orelse continue;
                 self.artwork_enabled = std.mem.eql(u8, value, "1");
@@ -143,19 +143,19 @@ pub fn validProductId(value: []const u8) bool {
 
 test "settings round trip through the file format" {
     var store = Store{};
-    store.face_layout = .nintendo;
+    store.face_buttons = .swapped;
     store.artwork_enabled = false;
     const game_settings = store.game("PRODUCT-1").?;
     game_settings.favorite = true;
 
     var data = std.ArrayList(u8).init(std.testing.allocator);
     defer data.deinit();
-    try data.writer().writeAll("version\t1\nface_layout\tnintendo\nartwork\t0\n");
+    try data.writer().writeAll("version\t1\nface_buttons\tswapped\nartwork\t0\n");
     try data.writer().writeAll("game\tPRODUCT-1\t1\n");
 
     var parsed = Store{};
     try parsed.parse(data.items);
-    try std.testing.expectEqual(FaceLayout.nintendo, parsed.face_layout);
+    try std.testing.expectEqual(FaceButtonMode.swapped, parsed.face_buttons);
     try std.testing.expect(!parsed.artwork_enabled);
     const parsed_game = parsed.findGame("PRODUCT-1").?;
     try std.testing.expect(parsed_game.favorite);

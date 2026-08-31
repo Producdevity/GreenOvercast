@@ -11,7 +11,7 @@ const Input = struct {
     controller: ?*c.SDL_GameController = null,
     sequence: u32 = 0,
     exit_held_since: c.Uint32 = 0,
-    face_layout: c.GoFaceButtonLayout = c.GO_FACE_BUTTON_LAYOUT_XBOX,
+    face_button_mode: c.GoFaceButtonMode = c.GO_FACE_BUTTON_MODE_SYSTEM,
     guide_chord: guide_chord.State = .{},
     pressed_buttons: u32 = 0,
 };
@@ -68,8 +68,8 @@ fn axis(input: *const Input, value: c.SDL_GameControllerAxis) i16 {
     return c.SDL_GameControllerGetAxis(controller, value);
 }
 
-fn mappedButton(layout: c.GoFaceButtonLayout, value: c.SDL_GameControllerButton) c.SDL_GameControllerButton {
-    if (layout != c.GO_FACE_BUTTON_LAYOUT_NINTENDO) return value;
+fn mappedButton(mode: c.GoFaceButtonMode, value: c.SDL_GameControllerButton) c.SDL_GameControllerButton {
+    if (mode != c.GO_FACE_BUTTON_MODE_SWAPPED) return value;
     return switch (value) {
         c.SDL_CONTROLLER_BUTTON_A => c.SDL_CONTROLLER_BUTTON_B,
         c.SDL_CONTROLLER_BUTTON_B => c.SDL_CONTROLLER_BUTTON_A,
@@ -80,7 +80,7 @@ fn mappedButton(layout: c.GoFaceButtonLayout, value: c.SDL_GameControllerButton)
 }
 
 fn semanticButtonPressed(input: *const Input, semantic: c.SDL_GameControllerButton) bool {
-    return button(input, mappedButton(input.face_layout, semantic));
+    return button(input, mappedButton(input.face_button_mode, semantic));
 }
 
 fn trigger(input: *const Input, value: c.SDL_GameControllerAxis) u16 {
@@ -173,13 +173,13 @@ pub export fn go_controller_input_event_is_active(
     return @intFromBool(instance_id == activeControllerId(handle));
 }
 
-pub export fn go_controller_input_set_face_layout(
+pub export fn go_controller_input_set_face_button_mode(
     input: ?*Input,
-    layout: c.GoFaceButtonLayout,
+    mode: c.GoFaceButtonMode,
 ) void {
     const handle = input orelse return;
-    if (layout == c.GO_FACE_BUTTON_LAYOUT_XBOX or layout == c.GO_FACE_BUTTON_LAYOUT_NINTENDO)
-        handle.face_layout = layout;
+    if (mode == c.GO_FACE_BUTTON_MODE_SYSTEM or mode == c.GO_FACE_BUTTON_MODE_SWAPPED)
+        handle.face_button_mode = mode;
 }
 
 pub export fn go_controller_input_map_button(
@@ -187,7 +187,26 @@ pub export fn go_controller_input_map_button(
     physical_button: c.Uint8,
 ) c.SDL_GameControllerButton {
     const handle = input orelse return @intCast(physical_button);
-    return mappedButton(handle.face_layout, @intCast(physical_button));
+    return mappedButton(handle.face_button_mode, @intCast(physical_button));
+}
+
+test "face button override preserves or swaps SDL semantics" {
+    try std.testing.expectEqual(
+        c.SDL_CONTROLLER_BUTTON_A,
+        mappedButton(c.GO_FACE_BUTTON_MODE_SYSTEM, c.SDL_CONTROLLER_BUTTON_A),
+    );
+    try std.testing.expectEqual(
+        c.SDL_CONTROLLER_BUTTON_B,
+        mappedButton(c.GO_FACE_BUTTON_MODE_SWAPPED, c.SDL_CONTROLLER_BUTTON_A),
+    );
+    try std.testing.expectEqual(
+        c.SDL_CONTROLLER_BUTTON_X,
+        mappedButton(c.GO_FACE_BUTTON_MODE_SWAPPED, c.SDL_CONTROLLER_BUTTON_Y),
+    );
+    try std.testing.expectEqual(
+        c.SDL_CONTROLLER_BUTTON_START,
+        mappedButton(c.GO_FACE_BUTTON_MODE_SWAPPED, c.SDL_CONTROLLER_BUTTON_START),
+    );
 }
 
 pub export fn go_controller_input_button_pressed(

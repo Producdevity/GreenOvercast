@@ -531,9 +531,9 @@ pub export fn go_handheld_ui_create(
     const artwork_cache_path = std.posix.getenv("GREENOVERCAST_ARTWORK_CACHE_DIR");
     ui.artwork.start(if (artwork_cache_path) |path| path else null) catch |err|
         std.debug.print("Artwork loading disabled: {s}\n", .{@errorName(err)});
-    c.go_controller_input_set_face_layout(
+    c.go_controller_input_set_face_button_mode(
         controller_handle,
-        if (stored.face_layout == .xbox) c.GO_FACE_BUTTON_LAYOUT_XBOX else c.GO_FACE_BUTTON_LAYOUT_NINTENDO,
+        if (stored.face_buttons == .system) c.GO_FACE_BUTTON_MODE_SYSTEM else c.GO_FACE_BUTTON_MODE_SWAPPED,
     );
     return ui;
 }
