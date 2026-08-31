@@ -9,7 +9,7 @@ The first launch shows a Microsoft device code. Open
 in.
 
 Tested on the RG35XX-H with muOS, the RG40XX-H with Knulli and ROCKNIX
-20260801, and the Miyoo Flip with SpruceOS.
+20260801, the Miyoo Flip with SpruceOS, and the R36S with AmberELEC.
 The release requires glibc 2.38 or newer. ArkOS is not supported.
 
 ## Controls

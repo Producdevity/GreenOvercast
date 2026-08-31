@@ -42,7 +42,7 @@ commit = "c08762ebfadeb4e986d2fed993bc7a54862d3ebe"
 license = "Apache-2.0 and MIT"
 linkage = "dynamic optional decoder plugin; firmware MPP preferred when compatible"
 build = "git submodule headers and private userspace library; tools/build-dependencies.sh and build.zig"
-status = "live cloud playback proven on RK3566 SpruceOS 4.2.0; RK3326 dArkOS 4.4 offline 720p decode and frontend startup proven"
+status = "live cloud playback proven on RK3566 SpruceOS 4.2.0 and RK3326 AmberELEC prerelease-20250515; RK3326 dArkOS 4.4 offline 720p decode and frontend startup also proven"
 
 [dep.libdatachannel]
 version = "v0.24.3"
