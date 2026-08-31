@@ -55,16 +55,6 @@ credential_dir="$config_dir"
 mkdir -p "$config_dir" "$credential_dir" "$artwork_cache_dir" || fail "Unable to create GreenOvercast's storage."
 chmod 700 "$credential_dir" || fail "Unable to protect GreenOvercast's private storage."
 
-if [ "$CFW_NAME" = "knulli" ]; then
-  runtime_credential_dir="${XDG_RUNTIME_DIR:-/var/run}/greenovercast"
-  for private_file in tokens.bin tokens.key h264-parameter-sets.bin catalog.tsv; do
-    if [ ! -e "$credential_dir/$private_file" ] && [ -f "$runtime_credential_dir/$private_file" ]; then
-      cp "$runtime_credential_dir/$private_file" "$credential_dir/$private_file" ||
-        fail "Unable to preserve GreenOvercast's existing session."
-    fi
-  done
-fi
-
 credential_file="$credential_dir/tokens.bin"
 credential_key_file="$credential_dir/tokens.key"
 video_bootstrap_file="$credential_dir/h264-parameter-sets.bin"
