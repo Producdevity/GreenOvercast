@@ -5,9 +5,8 @@ Allwinner's `media-codec` repository at commit
 `a912bbe300d522e199001bd903bab22e54eff37b`. The upstream source is
 <https://github.com/allwinner-zh/media-codec>.
 
-GreenOvercast builds these files into the replaceable
-`libgreenovercast-cedar.so`; they are never linked into the MPL executable.
-`tools/build-cedarx.sh` is the complete build recipe.
+GreenOvercast builds these files into `libgreenovercast-cedar.so`. The build
+recipe is in `build.zig`.
 
 The maintained changes are limited to the aarch64/H616 port:
 

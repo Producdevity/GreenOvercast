@@ -14,7 +14,7 @@ fn encodedLength(input: []const u8) ?usize {
     return length;
 }
 
-fn encode(input: []const u8, output: []u8) !usize {
+pub fn encode(input: []const u8, output: []u8) !usize {
     const required = encodedLength(input) orelse return error.Overflow;
     if (output.len < required + 1) return error.NoSpace;
 
@@ -36,14 +36,6 @@ fn encode(input: []const u8, output: []u8) !usize {
     }
     output[cursor] = 0;
     return cursor;
-}
-
-export fn go_form_urlencode(input: ?[*]const u8, input_length: usize, output: ?[*]u8, output_capacity: usize) callconv(.c) c_int {
-    const input_pointer = input orelse return -1;
-    const output_pointer = output orelse return -1;
-    const length = encode(input_pointer[0..input_length], output_pointer[0..output_capacity]) catch
-        return -1;
-    return std.math.cast(c_int, length) orelse -1;
 }
 
 test "encodes application form values and terminates them" {

@@ -31,6 +31,8 @@ typedef struct {
     int access_units;
     int decoded_frames;
     int rendered_frames;
+    int source_width;
+    int source_height;
     int frame_nals;
     int idr_nals;
     int parameter_nals;
@@ -57,8 +59,6 @@ typedef struct {
 GoVideoPipeline* go_video_pipeline_create(const GoVideoPipelineConfig* config);
 int go_video_pipeline_start(GoVideoPipeline* pipeline);
 void go_video_pipeline_stop(GoVideoPipeline* pipeline);
-void go_video_pipeline_set_crop_aspect(GoVideoPipeline* pipeline, unsigned int width,
-                                       unsigned int height);
 void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet, size_t length);
 void go_video_pipeline_render(GoVideoPipeline* pipeline);
 int go_video_pipeline_needs_keyframe(const GoVideoPipeline* pipeline);

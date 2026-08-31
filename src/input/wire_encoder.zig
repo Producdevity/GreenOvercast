@@ -79,10 +79,6 @@ pub fn buttonMask(source: u32) u16 {
     return mask;
 }
 
-pub export fn go_xcloud_button_mask(source: u32) u16 {
-    return buttonMask(source);
-}
-
 fn clampF32(v: f32, lo: f32, hi: f32) f32 {
     return @max(lo, @min(hi, v));
 }
@@ -103,7 +99,7 @@ pub fn encodeGamepad(buf: []u8, sequence: u32, timestamp_ms: f64, state: Gamepad
     encodeGamepadRaw(buf, sequence, timestamp_ms, state.buttons, axisToI16(state.left_x), axisToI16(state.left_y), axisToI16(state.right_x), axisToI16(state.right_y), triggerToU16(state.left_trigger), triggerToU16(state.right_trigger));
 }
 
-fn encodeGamepadRaw(buf: []u8, sequence: u32, timestamp_ms: f64, buttons: u16, left_x: i16, left_y: i16, right_x: i16, right_y: i16, left_trigger: u16, right_trigger: u16) void {
+pub fn encodeGamepadRaw(buf: []u8, sequence: u32, timestamp_ms: f64, buttons: u16, left_x: i16, left_y: i16, right_x: i16, right_y: i16, left_trigger: u16, right_trigger: u16) void {
     std.debug.assert(buf.len >= PACKET_SIZE);
 
     std.mem.writeInt(u16, buf[0..2], report_type_gamepad, .little);
@@ -121,10 +117,6 @@ fn encodeGamepadRaw(buf: []u8, sequence: u32, timestamp_ms: f64, buttons: u16, l
     std.mem.writeInt(u16, buf[28..30], right_trigger, .little);
     std.mem.writeInt(u32, buf[30..34], 1, .little);
     std.mem.writeInt(u32, buf[34..38], 1, .big);
-}
-
-pub export fn go_xcloud_encode_gamepad(buf: [*]u8, sequence: u32, timestamp_ms: f64, buttons: u16, left_x: i16, left_y: i16, right_x: i16, right_y: i16, left_trigger: u16, right_trigger: u16) void {
-    encodeGamepadRaw(buf[0..PACKET_SIZE], sequence, timestamp_ms, buttons, left_x, left_y, right_x, right_y, left_trigger, right_trigger);
 }
 
 test "neutral state produces known bytes" {

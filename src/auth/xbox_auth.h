@@ -19,6 +19,7 @@ GoXboxAuth* go_xbox_auth_create(void);
 int go_xbox_auth_load_credentials(GoXboxAuth* auth);
 int go_xbox_auth_device_sign_in(GoXboxAuth* auth, GoHandheldUi* ui);
 GoXboxAuthResult go_xbox_auth_refresh(GoXboxAuth* auth);
+int go_xbox_auth_sign_out(GoXboxAuth* auth);
 const char* go_xbox_auth_gssv_token(const GoXboxAuth* auth);
 const char* go_xbox_auth_passport_token(const GoXboxAuth* auth);
 void go_xbox_auth_destroy(GoXboxAuth* auth);

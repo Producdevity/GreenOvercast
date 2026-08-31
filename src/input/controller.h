@@ -11,9 +11,22 @@ extern "C" {
 
 typedef struct GoControllerInput GoControllerInput;
 
+typedef enum {
+    GO_FACE_BUTTON_MODE_SYSTEM = 0,
+    GO_FACE_BUTTON_MODE_SWAPPED = 1,
+} GoFaceButtonMode;
+
 GoControllerInput* go_controller_input_create(void);
 void go_controller_input_destroy(GoControllerInput* input);
 void go_controller_input_handle_event(GoControllerInput* input, const SDL_Event* event);
+int go_controller_input_event_is_active(const GoControllerInput* input,
+                                        const SDL_Event* event);
+void go_controller_input_set_face_button_mode(GoControllerInput* input, GoFaceButtonMode mode);
+SDL_GameControllerButton go_controller_input_map_button(const GoControllerInput* input,
+                                                        Uint8 physical_button);
+int go_controller_input_button_pressed(const GoControllerInput* input,
+                                       SDL_GameControllerButton semantic_button);
+Sint16 go_controller_input_axis(const GoControllerInput* input, SDL_GameControllerAxis axis);
 size_t go_controller_input_encode_metadata(GoControllerInput* input, uint8_t* output,
                                            size_t capacity);
 size_t go_controller_input_encode(GoControllerInput* input, uint8_t* output, size_t capacity);

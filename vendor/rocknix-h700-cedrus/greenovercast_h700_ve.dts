@@ -1,0 +1,23 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc";
+
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			video-codec@1c0e000 {
+				compatible = "allwinner,sun50i-h616-video-engine";
+				reg = <0x01c0e000 0x2000>;
+				clocks = <&ccu 41>, <&ccu 40>, <&ccu 51>;
+				clock-names = "ahb", "mod", "ram";
+				resets = <&ccu 5>;
+				interrupt-parent = <&gic>;
+				interrupts = <0 93 4>;
+			};
+		};
+	};
+};

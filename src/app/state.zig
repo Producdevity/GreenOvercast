@@ -24,6 +24,7 @@ pub const Event = enum {
     auth_begin_sign_in,
     auth_success,
     auth_rejected,
+    auth_sign_out,
     catalog_loaded,
     user_select_title,
     session_ready,
@@ -63,6 +64,7 @@ pub fn transition(current: State, event: Event) State {
         },
         .catalog => switch (event) {
             .user_select_title => .provisioning,
+            .auth_sign_out => .signed_out,
             else => .catalog,
         },
         .provisioning => switch (event) {
@@ -110,6 +112,13 @@ test "rejected credentials return to controller-first sign-in" {
     var state = transition(.cold_start, .auth_tokens_found);
     try std.testing.expectEqual(State.authenticating, state);
     state = transition(state, .auth_rejected);
+    try std.testing.expectEqual(State.signed_out, state);
+    state = transition(state, .auth_begin_sign_in);
+    try std.testing.expectEqual(State.device_code_pending, state);
+}
+
+test "sign out returns the catalog to authentication" {
+    var state = transition(.catalog, .auth_sign_out);
     try std.testing.expectEqual(State.signed_out, state);
     state = transition(state, .auth_begin_sign_in);
     try std.testing.expectEqual(State.device_code_pending, state);

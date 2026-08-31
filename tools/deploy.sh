@@ -24,6 +24,8 @@ remote_dir=$(ssh "$HOST" 'for path in \
   /opt/tools/PortMaster/autoinstall \
   "$HOME/.local/share/PortMaster/autoinstall" \
   /mnt/mmc/MUOS/PortMaster/autoinstall \
+  /mnt/mmc/ports/autoinstall \
+  /mnt/SDCARD/Persistent/portmaster/PortMaster/autoinstall \
   /roms/ports/PortMaster/autoinstall \
   /userdata/roms/ports/autoinstall; do
     if [ -d "$path" ]; then

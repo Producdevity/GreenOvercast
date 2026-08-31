@@ -1,0 +1,78 @@
+diff --git a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+index 058e0c00e431..1539efb1c827 100644
+--- a/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus_hw.c
+@@ -17,4 +17,5 @@
+ #include <linux/clk.h>
++#include <linux/mfd/syscon.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/regmap.h>
+ #include <linux/reset.h>
+@@ -243,6 +244,41 @@ int cedrus_hw_resume(struct device *device)
+ 	return ret;
+ }
+ 
++static bool cedrus_uses_h616_sram(struct device *dev)
++{
++	return of_device_is_compatible(dev->of_node,
++				       "allwinner,sun50i-h616-video-engine");
++}
++
++static int cedrus_sram_claim(struct device *dev)
++{
++	struct device_node *syscon_node;
++	struct regmap *syscon;
++	int ret;
++
++	if (!cedrus_uses_h616_sram(dev))
++		return sunxi_sram_claim(dev);
++
++	syscon_node = of_find_compatible_node(NULL, NULL,
++					      "allwinner,sun50i-h616-system-control");
++	if (!syscon_node)
++		return -ENODEV;
++
++	syscon = syscon_node_to_regmap(syscon_node);
++	of_node_put(syscon_node);
++	if (IS_ERR(syscon))
++		return PTR_ERR(syscon);
++
++	ret = regmap_update_bits(syscon, 0, BIT(0), 0);
++	return ret;
++}
++
++static void cedrus_sram_release(struct device *dev)
++{
++	if (!cedrus_uses_h616_sram(dev))
++		sunxi_sram_release(dev);
++}
++
+ int cedrus_hw_probe(struct cedrus_dev *dev)
+ {
+ 	const struct cedrus_variant *variant;
+@@ -273,7 +304,7 @@ int cedrus_hw_probe(struct cedrus_dev *dev)
+ 		return ret;
+ 	}
+ 
+-	ret = sunxi_sram_claim(dev->dev);
++	ret = cedrus_sram_claim(dev->dev);
+ 	if (ret) {
+ 		dev_err(dev->dev, "Failed to claim SRAM\n");
+ 
+@@ -339,6 +370,6 @@ err_pm:
+ 	pm_runtime_disable(dev->dev);
+ err_sram:
+-	sunxi_sram_release(dev->dev);
++	cedrus_sram_release(dev->dev);
+ err_mem:
+ 	of_reserved_mem_device_release(dev->dev);
+ 
+@@ -352,7 +383,7 @@ void cedrus_hw_remove(struct cedrus_dev *dev)
+ 	if (!pm_runtime_status_suspended(dev->dev))
+ 		cedrus_hw_suspend(dev->dev);
+ 
+-	sunxi_sram_release(dev->dev);
++	cedrus_sram_release(dev->dev);
+ 
+ 	of_reserved_mem_device_release(dev->dev);
+ }

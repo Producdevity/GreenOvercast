@@ -1,6 +1,6 @@
 # Third-party licenses
 
-GreenOvercast is MPL-2.0. The libraries below are linked or bundled into the
+GreenOvercast is MPL-2.0. The components below are linked or bundled into the
 release. Full license texts for the bundled libraries ship alongside the port in
 `packaging/portmaster/greenovercast/greenovercast/licenses/`.
 
@@ -13,8 +13,10 @@ release. Full license texts for the bundled libraries ship alongside the port in
 | [nlohmann/json](https://github.com/nlohmann/json)                               | MIT               | JSON support used by libdatachannel (header-only)            |
 | [plog](https://github.com/SergiusTheBest/plog)                                  | MIT               | Logging used by libdatachannel (header-only)                 |
 | [CedarX](https://github.com/allwinner-zh/media-codec) (Allwinner H.264 decoder) | LGPLv2.1-or-later | Hardware H.264 decode (shared)                               |
+| [Linux Cedrus](https://www.kernel.org/) (7.0.11)                               | GPL-2.0-only      | ROCKNIX H700 V4L2 Request decoder modules                    |
 | [Rockchip MPP](https://github.com/rockchip-linux/mpp) (v1.1.0)                  | Apache-2.0/MIT    | Optional Rockchip H.264 decode (shared)                      |
-| [FFmpeg](https://ffmpeg.org/) (libavcodec, libavutil, libswscale)               | LGPLv2.1-or-later | Software H.264 fallback and color conversion (shared)        |
+| [FFmpeg](https://ffmpeg.org/) (libavcodec, libavutil, libswscale)               | LGPLv2.1-or-later | H.264 decode, JPEG artwork, and color conversion             |
+| [libudev-zero](https://github.com/illiliti/libudev-zero)                        | ISC               | V4L2 media-device discovery (static)                         |
 | [SDL2](https://www.libsdl.org/)                                                 | Zlib              | Window, renderer, audio, and controller input (device)       |
 | [OpenSSL](https://www.openssl.org/)                                             | Apache-2.0        | TLS, WebRTC DTLS, and credential encryption (static)         |
 | [libcurl](https://curl.se/)                                                     | curl (MIT-style)  | HTTP for Xbox services (static)                              |

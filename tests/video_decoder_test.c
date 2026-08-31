@@ -74,6 +74,10 @@ int main(void) {
     assert(preference == GO_VIDEO_DECODER_PREFERENCE_AUTO);
     assert(go_video_decoder_preference_parse("mpp", &preference) == 0);
     assert(preference == GO_VIDEO_DECODER_PREFERENCE_MPP);
+    assert(go_video_decoder_preference_parse("v4l2", &preference) == 0);
+    assert(preference == GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST);
+    assert(go_video_decoder_preference_parse("v4l2-request", &preference) == 0);
+    assert(preference == GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST);
     assert(go_video_decoder_preference_parse("invalid", &preference) == -1);
 
     const uint8_t rockchip[] = "rockchip,rk3566\0rockchip,rk3568";
@@ -84,32 +88,38 @@ int main(void) {
     assert(go_video_decoder_platform(NULL, 0, 1) == GO_VIDEO_PLATFORM_OTHER_ARM);
     assert(go_video_decoder_platform(rockchip, sizeof(rockchip), 0) == GO_VIDEO_PLATFORM_NON_ARM);
 
-    GoVideoDecoderBackend candidates[3];
+    GoVideoDecoderBackend candidates[4];
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_AUTO,
-                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 3) == 2);
+                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 4) == 3);
     assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_MPP);
-    assert(candidates[1] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
+    assert(candidates[1] == GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST);
+    assert(candidates[2] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_AUTO,
-                                            GO_VIDEO_PLATFORM_ALLWINNER, candidates, 3) == 2);
-    assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_CEDAR);
-    assert(candidates[1] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
-    assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_AUTO,
-                                            GO_VIDEO_PLATFORM_OTHER_ARM, candidates, 3) == 3);
-    assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_MPP);
+                                            GO_VIDEO_PLATFORM_ALLWINNER, candidates, 4) == 3);
+    assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST);
     assert(candidates[1] == GO_VIDEO_DECODER_BACKEND_CEDAR);
     assert(candidates[2] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_AUTO,
-                                            GO_VIDEO_PLATFORM_NON_ARM, candidates, 3) == 1);
+                                            GO_VIDEO_PLATFORM_OTHER_ARM, candidates, 4) == 4);
+    assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_MPP);
+    assert(candidates[1] == GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST);
+    assert(candidates[2] == GO_VIDEO_DECODER_BACKEND_CEDAR);
+    assert(candidates[3] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
+    assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_AUTO,
+                                            GO_VIDEO_PLATFORM_NON_ARM, candidates, 4) == 1);
     assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_MPP,
-                                            GO_VIDEO_PLATFORM_NON_ARM, candidates, 3) == 1);
+                                            GO_VIDEO_PLATFORM_NON_ARM, candidates, 4) == 1);
     assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_MPP);
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_CEDAR,
-                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 3) == 1);
+                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 4) == 1);
     assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_CEDAR);
     assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_SOFTWARE,
-                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 3) == 1);
+                                            GO_VIDEO_PLATFORM_ROCKCHIP, candidates, 4) == 1);
     assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_SOFTWARE);
+    assert(go_video_decoder_candidate_order(GO_VIDEO_DECODER_PREFERENCE_V4L2_REQUEST,
+                                            GO_VIDEO_PLATFORM_NON_ARM, candidates, 4) == 1);
+    assert(candidates[0] == GO_VIDEO_DECODER_BACKEND_V4L2_REQUEST);
 
     FakeDecoder decoder = {
         .submit_result = GO_VIDEO_DECODER_RESULT_OK,

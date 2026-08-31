@@ -11,9 +11,9 @@ CEDAR="$ROOT/zig-out/bin/libgreenovercast-cedar.so"
 MPP_PLUGIN="$ROOT/zig-out/rockchip/libgreenovercast-mpp.so"
 MPP_RUNTIME="$ROOT/zig-out/rockchip/librockchip_mpp.so.1"
 MPP_PROBE="$ROOT/zig-out/rockchip/greenovercast-mpp-probe.aarch64"
-AVCODEC="$ROOT/zig-out/bin/libavcodec.so.58"
-AVUTIL="$ROOT/zig-out/bin/libavutil.so.56"
-SWSCALE="$ROOT/zig-out/bin/libswscale.so.5"
+AVCODEC="$ROOT/zig-out/bin/libavcodec.so.63"
+AVUTIL="$ROOT/zig-out/bin/libavutil.so.61"
+SWSCALE="$ROOT/zig-out/bin/libswscale.so.10"
 
 case "$OUTPUT" in
 /*) ;;
@@ -53,7 +53,8 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/greenovercast-port.XXXXXX")
 cleanup() {
   rm -rf "$stage"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 checker="$stage/PortMaster-New"
 port="$checker/ports/greenovercast"
@@ -71,17 +72,10 @@ cp "$ROOT/vendor/mpp/LICENSES/Apache-2.0" \
   "$port/greenovercast/licenses/LICENSE.Rockchip-MPP-Apache-2.0.txt"
 cp "$ROOT/vendor/mpp/LICENSES/MIT" \
   "$port/greenovercast/licenses/LICENSE.Rockchip-MPP-MIT.txt"
-cp "$AVCODEC" "$port/greenovercast/libavcodec.so.58"
-cp "$AVUTIL" "$port/greenovercast/libavutil.so.56"
-cp "$SWSCALE" "$port/greenovercast/libswscale.so.5"
-chmod 644 "$port/GreenOvercast.sh" "$port/greenovercast/webrtc_stream.aarch64" \
-  "$port/greenovercast/libgreenovercast-cedar.so" \
-  "$port/greenovercast/libgreenovercast-mpp.so" \
-  "$port/greenovercast/rockchip/librockchip_mpp.so.1" \
-  "$port/greenovercast/rockchip/greenovercast-mpp-probe.aarch64" \
-  "$port/greenovercast/libavcodec.so.58" \
-  "$port/greenovercast/libavutil.so.56" \
-  "$port/greenovercast/libswscale.so.5"
+cp "$AVCODEC" "$port/greenovercast/libavcodec.so.63"
+cp "$AVUTIL" "$port/greenovercast/libavutil.so.61"
+cp "$SWSCALE" "$port/greenovercast/libswscale.so.10"
+find "$port" -type f -exec chmod 644 {} +
 : >"$checker/.github_check"
 
 (
@@ -98,11 +92,9 @@ archive="$checker/releases/greenovercast.zip"
 }
 
 python3 - "$archive" <<'PY'
+import hashlib
 import sys
 import zipfile
-
-with zipfile.ZipFile(sys.argv[1]) as archive:
-    names = archive.namelist()
 
 required = {
     "GreenOvercast.sh",
@@ -115,16 +107,39 @@ required = {
     "greenovercast/libgreenovercast-mpp.so",
     "greenovercast/rockchip/librockchip_mpp.so.1",
     "greenovercast/rockchip/greenovercast-mpp-probe.aarch64",
+    "greenovercast/rocknix/h700/cedrus-modules",
+    "greenovercast/rocknix/h700/greenovercast_h700_overlay.ko",
+    "greenovercast/rocknix/h700/sunxi-cedrus.ko",
+    "greenovercast/ROCKNIX-H700-SOURCE.md",
+    "greenovercast/licenses/LICENSE.Linux.txt",
+    "greenovercast/licenses/LICENSE.libudev-zero.txt",
     "greenovercast/licenses/LICENSE.Rockchip-MPP-Apache-2.0.txt",
     "greenovercast/licenses/LICENSE.Rockchip-MPP-MIT.txt",
-    "greenovercast/libavcodec.so.58",
-    "greenovercast/libavutil.so.56",
-    "greenovercast/libswscale.so.5",
+    "greenovercast/libavcodec.so.63",
+    "greenovercast/libavutil.so.61",
+    "greenovercast/libswscale.so.10",
 }
-missing = sorted(required.difference(names))
-bad_root = sorted(name for name in names if "/" not in name and name != "GreenOvercast.sh")
-if missing or bad_root:
-    raise SystemExit(f"invalid PortMaster archive: missing={missing}, bad_root={bad_root}")
+expected_hashes = {
+    "greenovercast/rocknix/h700/greenovercast_h700_overlay.ko":
+        "dbad85de7238f163cf4985eb017f33866acd21e13015abe7636b2275f9e6b944",
+    "greenovercast/rocknix/h700/sunxi-cedrus.ko":
+        "ca1bb3534c16c4851cae1ba2ac84632f7e8ba85fa8f43fc253fe215f98d92c32",
+}
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    names = archive.namelist()
+    missing = sorted(required.difference(names))
+    bad_root = sorted(
+        name for name in names if "/" not in name and name != "GreenOvercast.sh"
+    )
+    bad_hashes = sorted(
+        name for name, expected in expected_hashes.items()
+        if name in names and hashlib.sha256(archive.read(name)).hexdigest() != expected
+    )
+if missing or bad_root or bad_hashes:
+    raise SystemExit(
+        f"invalid PortMaster archive: missing={missing}, "
+        f"bad_root={bad_root}, bad_hashes={bad_hashes}"
+    )
 PY
 
 mv "$archive" "$OUTPUT"

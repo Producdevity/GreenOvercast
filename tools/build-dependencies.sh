@@ -19,6 +19,13 @@ CXX_WRAPPER="$CROSS/c++"
 AR_WRAPPER="$CROSS/ar"
 RANLIB_WRAPPER="$CROSS/ranlib"
 TOOLCHAIN="$CROSS/toolchain.cmake"
+LIBDATACHANNEL_SOURCE="$ROOT/vendor/libdatachannel"
+LIBDATACHANNEL_BUILD="$TOOLS/build/libdatachannel-aarch64-release"
+LIBDATACHANNEL_COMMIT=c6696d157b5612df2a741d9a03b192b47ab6cefb
+LIBDATACHANNEL_PATCH="$ROOT/vendor/patches/libdatachannel-0.24.3-xbox-pli.patch"
+MPP_SOURCE="$ROOT/vendor/mpp"
+MPP_BUILD="$TOOLS/build/mpp-aarch64-release"
+MPP_COMMIT=c08762ebfadeb4e986d2fed993bc7a54862d3ebe
 
 [ -x "$ZIG" ] || {
   echo "missing Zig 0.14.1; run tools/bootstrap.sh" >&2
@@ -76,6 +83,26 @@ if [ "${1:-}" = "--toolchain-only" ]; then
   exit 0
 fi
 
+[ -f "$LIBDATACHANNEL_SOURCE/CMakeLists.txt" ] || {
+  echo "missing libdatachannel submodule; run tools/bootstrap.sh" >&2
+  exit 1
+}
+[ -f "$MPP_SOURCE/CMakeLists.txt" ] || {
+  echo "missing Rockchip MPP submodule; run tools/bootstrap.sh" >&2
+  exit 1
+}
+
+actual_libdatachannel_commit=$(git -C "$LIBDATACHANNEL_SOURCE" rev-parse HEAD)
+[ "$actual_libdatachannel_commit" = "$LIBDATACHANNEL_COMMIT" ] || {
+  echo "libdatachannel must be at $LIBDATACHANNEL_COMMIT (found $actual_libdatachannel_commit)" >&2
+  exit 1
+}
+actual_mpp_commit=$(git -C "$MPP_SOURCE" rev-parse HEAD)
+[ "$actual_mpp_commit" = "$MPP_COMMIT" ] || {
+  echo "Rockchip MPP must be at $MPP_COMMIT (found $actual_mpp_commit)" >&2
+  exit 1
+}
+
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | cut -d' ' -f1
@@ -110,6 +137,23 @@ fetch_source() {
   }
 }
 
+fetch_file() {
+  file_name=$1
+  file_url=$2
+  expected_hash=$3
+  destination="$DOWNLOADS/$file_name"
+
+  if [ ! -f "$destination" ]; then
+    echo "fetching $file_url"
+    curl -fL --retry 3 "$file_url" -o "$destination"
+  fi
+  actual_hash=$(hash_file "$destination")
+  [ "$actual_hash" = "$expected_hash" ] || {
+    echo "sha256 mismatch for $file_name" >&2
+    exit 1
+  }
+}
+
 fetch_source openssl-3.5.7.tar.gz openssl-3.5.7 \
   https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz \
   a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
@@ -119,18 +163,28 @@ fetch_source curl-8.20.0.tar.xz curl-8.20.0 \
 fetch_source opus-1.6.1.tar.gz opus-1.6.1 \
   https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz \
   6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
-fetch_source ffmpeg-4.4.8.tar.xz ffmpeg-4.4.8 \
-  https://ffmpeg.org/releases/ffmpeg-4.4.8.tar.xz \
-  c73848c4ae283d9eaee7be3b276affbc3543380483555500d0dd2c9b7e1c39c3
+fetch_source ffmpeg-9.0.tar.xz ffmpeg-9.0 \
+  https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz \
+  7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52
+fetch_file ffmpeg-9.0-v4l2-request.patch \
+  https://raw.githubusercontent.com/ROCKNIX/distribution/e9e6b8531df13bc9058ca1771dab5f0c4fd5e98e/packages/multimedia/ffmpeg/patches/v4l2-request/0001-v4l2-request.patch \
+  afd04c202c27081c355d8d34b58a52c4141de26433007e27ed6e0d2093d10d3c
+fetch_source libudev-zero-1.0.3.tar.gz libudev-zero-1.0.3 \
+  https://github.com/illiliti/libudev-zero/archive/refs/tags/1.0.3.tar.gz \
+  0bd89b657d62d019598e6c7ed726ff8fed80e8ba092a83b484d66afb80b77da5
+fetch_source libdrm-2.4.128.tar.xz libdrm-2.4.128 \
+  https://dri.freedesktop.org/libdrm/libdrm-2.4.128.tar.xz \
+  3bb35db8700c2a0b569f2c6729a53f5495786856b310854c8de57782a22bddac
 fetch_source SDL2-2.28.5.tar.gz SDL2-2.28.5 \
   https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz \
   332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4
 
 export ZIG_GLOBAL_CACHE_DIR="$TOOLS/cache/zig"
+export SOURCE_DATE_EPOCH=0
 
-if [ ! -f "$BUILDS/.openssl-3.5.7-static" ]; then
-  openssl_build="$BUILDS/openssl-3.5.7-static"
-  openssl_stage="$BUILDS/openssl-3.5.7-static-stage"
+if [ ! -f "$BUILDS/.openssl-3.5.7-static-reproducible" ]; then
+  openssl_build="$BUILDS/openssl-3.5.7-static-reproducible"
+  openssl_stage="$BUILDS/openssl-3.5.7-static-reproducible-stage"
   mkdir -p "$openssl_build" "$openssl_stage"
   cp "$CC_WRAPPER" "$openssl_build/cc"
   cp "$AR_WRAPPER" "$openssl_build/ar"
@@ -148,7 +202,7 @@ if [ ! -f "$BUILDS/.openssl-3.5.7-static" ]; then
   mkdir -p "$PREFIX/include" "$PREFIX/lib"
   cp -R "$openssl_stage/usr/include/openssl" "$PREFIX/include/"
   cp "$openssl_stage/usr/lib/libcrypto.a" "$openssl_stage/usr/lib/libssl.a" "$PREFIX/lib/"
-  : >"$BUILDS/.openssl-3.5.7-static"
+  : >"$BUILDS/.openssl-3.5.7-static-reproducible"
 fi
 
 if [ ! -f "$BUILDS/.opus-1.6.1-static" ]; then
@@ -232,21 +286,42 @@ if [ ! -f "$BUILDS/.sdl2-2.28.5-link" ]; then
   : >"$BUILDS/.sdl2-2.28.5-link"
 fi
 
-if [ ! -f "$BUILDS/.ffmpeg-4.4.8-h264-shared" ]; then
-  ffmpeg_build="$BUILDS/ffmpeg-4.4.8-h264-shared"
-  ffmpeg_patch="$ROOT/vendor/patches/ffmpeg-4.4.8-glibc-sysctl.patch"
-  if grep -q '^check_func  sysctl$' "$SOURCES/ffmpeg-4.4.8/configure"; then
-    patch -d "$SOURCES/ffmpeg-4.4.8" -p1 <"$ffmpeg_patch"
-  elif ! grep -q '^check_func_headers sys/sysctl.h sysctl$' "$SOURCES/ffmpeg-4.4.8/configure"; then
-    echo "FFmpeg source does not match the pinned patch" >&2
-    exit 1
-  fi
+if [ ! -f "$BUILDS/.libudev-zero-1.0.3-static" ]; then
+  make -C "$SOURCES/libudev-zero-1.0.3" clean
+  make -C "$SOURCES/libudev-zero-1.0.3" \
+    CC="$CC_WRAPPER" AR="$AR_WRAPPER" CFLAGS="-O2" libudev.a
+  make -C "$SOURCES/libudev-zero-1.0.3" \
+    PREFIX="$PREFIX" LIBDIR="$PREFIX/lib" INCLUDEDIR="$PREFIX/include" \
+    PKGCONFIGDIR="$PREFIX/lib/pkgconfig" install-static
+  : >"$BUILDS/.libudev-zero-1.0.3-static"
+fi
+
+if [ ! -f "$BUILDS/.libdrm-2.4.128-v4l2-headers" ]; then
+  mkdir -p "$PREFIX/include/libdrm"
+  cp "$SOURCES/libdrm-2.4.128/include/drm/drm.h" \
+    "$SOURCES/libdrm-2.4.128/include/drm/drm_fourcc.h" \
+    "$SOURCES/libdrm-2.4.128/include/drm/drm_mode.h" \
+    "$PREFIX/include/libdrm/"
+  : >"$BUILDS/.libdrm-2.4.128-v4l2-headers"
+fi
+
+if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
+  ffmpeg_build="$BUILDS/ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+  ffmpeg_source="$BUILDS/ffmpeg-9.0"
+  ffmpeg_request_patch="$DOWNLOADS/ffmpeg-9.0-v4l2-request.patch"
+  ffmpeg_portable_patch="$ROOT/vendor/patches/ffmpeg-9.0-v4l2-request-portable.patch"
+  rm -rf "$ffmpeg_build" "$ffmpeg_source"
   mkdir -p "$ffmpeg_build"
+  tar -xf "$DOWNLOADS/ffmpeg-9.0.tar.xz" -C "$BUILDS"
+  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_request_patch"
+  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_portable_patch"
+  find "$ffmpeg_source" -name '*.orig' -delete
   nm_tool=$(command -v llvm-nm || command -v nm)
   (
     cd "$ffmpeg_build"
     env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS \
-      "$SOURCES/ffmpeg-4.4.8/configure" \
+      PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
+      "$ffmpeg_source/configure" \
       --prefix="$PREFIX" \
       --arch=aarch64 \
       --target-os=linux \
@@ -265,7 +340,12 @@ if [ ! -f "$BUILDS/.ffmpeg-4.4.8-h264-shared" ]; then
       --enable-avutil \
       --enable-swscale \
       --enable-decoder=h264 \
+      --enable-decoder=mjpeg \
       --enable-parser=h264 \
+      --enable-v4l2-request \
+      --enable-libudev \
+      --disable-libdrm \
+      --enable-hwaccel=h264_v4l2request \
       --enable-pthreads \
       --disable-network \
       --disable-iconv \
@@ -273,11 +353,75 @@ if [ ! -f "$BUILDS/.ffmpeg-4.4.8-h264-shared" ]; then
       --disable-doc \
       --disable-debug \
       --disable-stripping \
-      --extra-cflags="-O3 -ffile-prefix-map=$ROOT=."
+      --extra-cflags="-O3 -I$PREFIX/include/libdrm -ffile-prefix-map=$ROOT=." \
+      --extra-ldflags="-L$PREFIX/lib"
     make -j4
     make install-libs install-headers
   )
-  : >"$BUILDS/.ffmpeg-4.4.8-h264-shared"
+  : >"$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+fi
+
+if [ ! -f "$LIBDATACHANNEL_BUILD/.greenovercast-$LIBDATACHANNEL_COMMIT" ]; then
+  [ -f "$LIBDATACHANNEL_PATCH" ] || {
+    echo "missing libdatachannel Xbox PLI patch" >&2
+    exit 1
+  }
+  git -C "$LIBDATACHANNEL_SOURCE" diff --quiet -- src/rtcpreceivingsession.cpp || {
+    echo "libdatachannel rtcpreceivingsession.cpp has local changes" >&2
+    exit 1
+  }
+  git -C "$LIBDATACHANNEL_SOURCE" apply --check "$LIBDATACHANNEL_PATCH"
+  git -C "$LIBDATACHANNEL_SOURCE" apply "$LIBDATACHANNEL_PATCH"
+  restore_libdatachannel() {
+    git -C "$LIBDATACHANNEL_SOURCE" apply --reverse "$LIBDATACHANNEL_PATCH"
+  }
+  trap restore_libdatachannel EXIT
+  trap 'exit 1' HUP INT TERM
+
+  cmake_fresh=
+  if [ -f "$LIBDATACHANNEL_BUILD/CMakeCache.txt" ]; then
+    cached_source=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$LIBDATACHANNEL_BUILD/CMakeCache.txt")
+    cached_build=$(sed -n 's/^CMAKE_CACHEFILE_DIR:INTERNAL=//p' "$LIBDATACHANNEL_BUILD/CMakeCache.txt")
+    if [ "$cached_source" != "$LIBDATACHANNEL_SOURCE" ] || [ "$cached_build" != "$LIBDATACHANNEL_BUILD" ]; then
+      cmake_fresh=--fresh
+    fi
+  fi
+  cmake $cmake_fresh -S "$LIBDATACHANNEL_SOURCE" -B "$LIBDATACHANNEL_BUILD" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=$ROOT=." \
+    -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=$ROOT=." \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_SHARED_DEPS_LIBS=OFF \
+    -DNO_TESTS=ON \
+    -DNO_EXAMPLES=ON \
+    -DNO_WEBSOCKET=ON \
+    -DNO_MEDIA=OFF \
+    -DUSE_GNUTLS=OFF \
+    -DUSE_MBEDTLS=OFF \
+    -DUSE_SYSTEM_JSON=OFF \
+    -DUSE_SYSTEM_JUICE=OFF \
+    -DUSE_SYSTEM_PLOG=OFF \
+    -DUSE_SYSTEM_SRTP=OFF \
+    -DUSE_SYSTEM_USRSCTP=OFF \
+    -DOPENSSL_INCLUDE_DIR="$PREFIX/include" \
+    -DOPENSSL_SSL_LIBRARY="$PREFIX/lib/libssl.a" \
+    -DOPENSSL_CRYPTO_LIBRARY="$PREFIX/lib/libcrypto.a"
+  cmake --build "$LIBDATACHANNEL_BUILD" --parallel
+  : >"$LIBDATACHANNEL_BUILD/.greenovercast-$LIBDATACHANNEL_COMMIT"
+  restore_libdatachannel
+  trap - EXIT HUP INT TERM
+fi
+
+if [ ! -f "$MPP_BUILD/.greenovercast-$MPP_COMMIT" ]; then
+  cmake -S "$MPP_SOURCE" -B "$MPP_BUILD" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+    -DCMAKE_LINKER="$CXX_WRAPPER" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TEST=OFF \
+    -DBUILD_SHARED_LIBS=ON
+  cmake --build "$MPP_BUILD" --target rockchip_mpp --parallel
+  : >"$MPP_BUILD/.greenovercast-$MPP_COMMIT"
 fi
 
 for required in \
@@ -286,9 +430,15 @@ for required in \
   "$PREFIX/lib/libcurl.a" \
   "$PREFIX/lib/libopus.a" \
   "$PREFIX/lib/libSDL2.so" \
-  "$PREFIX/lib/libavcodec.so.58" \
-  "$PREFIX/lib/libavutil.so.56" \
-  "$PREFIX/lib/libswscale.so.5"; do
+  "$PREFIX/lib/libavcodec.so.63" \
+  "$PREFIX/lib/libavutil.so.61" \
+  "$PREFIX/lib/libswscale.so.10" \
+  "$LIBDATACHANNEL_BUILD/libdatachannel.a" \
+  "$LIBDATACHANNEL_BUILD/deps/libjuice/libjuice.a" \
+  "$LIBDATACHANNEL_BUILD/deps/usrsctp/usrsctplib/libusrsctp.a" \
+  "$LIBDATACHANNEL_BUILD/deps/libsrtp/libsrtp2.a" \
+  "$MPP_BUILD/mpp/librockchip_mpp.so" \
+  "$MPP_BUILD/mpp/librockchip_mpp.so.0"; do
   [ -e "$required" ] || {
     echo "dependency build did not produce $required" >&2
     exit 1

@@ -240,3 +240,14 @@ int go_token_store_save(const char* credential_path, const char* key_path,
     free(file_data);
     return result;
 }
+
+int go_token_store_delete(const char* credential_path, const char* key_path) {
+    if (!credential_path || !key_path)
+        return -1;
+    int failed = 0;
+    if (unlink(credential_path) != 0 && errno != ENOENT)
+        failed = 1;
+    if (unlink(key_path) != 0 && errno != ENOENT)
+        failed = 1;
+    return failed ? -1 : 0;
+}

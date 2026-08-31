@@ -13,19 +13,13 @@ fn normalize(input: []const u8, output: []u8) ?[]const u8 {
     return output[0..length];
 }
 
-fn matches(title: []const u8, query: []const u8) bool {
+pub fn matches(title: []const u8, query: []const u8) bool {
     var normalized_title_storage: [normalized_capacity]u8 = undefined;
     var normalized_query_storage: [normalized_capacity]u8 = undefined;
     const normalized_title = normalize(title, &normalized_title_storage) orelse return false;
     const normalized_query = normalize(query, &normalized_query_storage) orelse return false;
     return normalized_query.len == 0 or
         std.mem.indexOf(u8, normalized_title, normalized_query) != null;
-}
-
-export fn go_catalog_search_matches(title: ?[*:0]const u8, query: ?[*:0]const u8) callconv(.c) c_int {
-    const title_pointer = title orelse return 0;
-    const query_pointer = query orelse return 0;
-    return @intFromBool(matches(std.mem.span(title_pointer), std.mem.span(query_pointer)));
 }
 
 test "search is case insensitive and ignores title separators" {

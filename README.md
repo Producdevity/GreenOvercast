@@ -3,10 +3,8 @@
 <img width="640" height="480" alt="screenshot" src="https://github.com/user-attachments/assets/4ec93eeb-8795-44e5-9ba8-c6065adf4660" />
 
 GreenOvercast is a native Xbox Cloud Gaming client for small ARM64 Linux
-handhelds. It streams at 720p and uses hardware video decoding on supported
-H700 and Rockchip firmware.
-
-Built for the Anbernic RG35XX-H (muOS) and validated on the RG40XX-H (Knulli).
+handhelds. It requests a stream matching the device display and uses hardware
+video decoding on supported H700 and Rockchip firmware.
 
 This independent project is not affiliated with or endorsed by Microsoft.
 
@@ -23,41 +21,43 @@ GreenOvercast from Ports.
 
 The first launch shows a Microsoft device code. Open
 [microsoft.com/link](https://www.microsoft.com/link) on another device and enter
-the code to sign in. Knulli asks you to sign in again after a reboot.
+the code to sign in.
 
 GreenOvercast is experimental.
 
 ## Controls
 
-| Button             | Action                                      |
-| ------------------ | ------------------------------------------- |
-| D-pad / Left Stick | Navigate                                    |
-| A                  | Select                                      |
-| B                  | Back                                        |
-| X                  | Open search / delete a letter               |
-| Y                  | Change aspect ratio / clear search          |
-| L1 / R1            | Xbox LB / RB                                |
-| L2 / R2            | Xbox LT / RT                                |
-| Start              | Apply search / Xbox Menu                    |
-| Select             | Xbox View                                   |
-| L3 + R3            | Xbox Guide                                  |
-| Select + Start     | Exit GreenOvercast after holding one second |
+| Button             | Library / menus                   | In game                           |
+| ------------------ | --------------------------------- | --------------------------------- |
+| D-pad / Left Stick | Navigate; hold to scroll faster   | Movement                          |
+| A                  | Select, play, or type              | Xbox A                            |
+| B                  | Back or cancel                    | Xbox B                            |
+| X                  | Search or delete a letter         | Xbox X                            |
+| Y                  | Favorite a game or clear search   | Xbox Y                            |
+| L1 / R1            | Switch All / Favorites            | Xbox LB / RB                      |
+| L2 / R2            | Jump by first letter              | Xbox LT / RT                      |
+| Start              | Settings or apply search          | Xbox Menu                         |
+| Select             | —                                 | Xbox View                         |
+| L3 + R3            | —                                 | Xbox Guide                        |
+| Select + Start     | Exit after holding for one second | Exit after holding for one second |
 
-In-game controls use the standard Xbox controller layout.
-
-The aspect-ratio setting applies to the next game you start. Most games only
-support 16:9.
+Settings include Xbox/Nintendo face-button layouts, game artwork, and Sign
+out. Games that return a 16:9 stream remain letterboxed on 4:3 displays.
 
 ## Supported devices
 
-| Device   | OS                   | Status |
-| -------- | -------------------- | ------ |
-| RG35XX-H | muOS 2508.4          | Tested |
-| RG40XX-H | Knulli (Batocera 42) | Tested |
+| Device     | OS                              | Status |
+| ---------- | ------------------------------- | ------ |
+| RG35XX-H   | muOS 2508.4                     | Tested |
+| RG40XX-H   | Knulli (Batocera 42)            | Tested |
+| RG40XX-H   | ROCKNIX 20260801                | Tested |
+| Miyoo Flip | SpruceOS 4.2.0                  | Tested |
+| R36S       | AmberELEC prerelease-20250515   | Tested |
 
-Rockchip MPP decoding also works on ROCKNIX, but support depends on the device
-and firmware. Other devices fall back to software decoding, which is too slow
-for normal gameplay.
+Hardware decoding is verified on the H700 systems above. muOS and Knulli use
+CedarX; ROCKNIX 20260801 uses the bundled Cedrus modules. Tested Rockchip builds
+use Rockchip MPP on RK3566 with SpruceOS and RK3326 with AmberELEC. Other
+devices fall back to software decoding, which is too slow for normal gameplay.
 
 The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
 supported.
@@ -68,26 +68,23 @@ You need a Linux or macOS host with `cmake`, `curl`, `git`, `make`, `patch`,
 `perl`, and `python3`.
 
 ```sh
-tools/bootstrap.sh           # fetch Zig 0.14.1
-tools/zig.sh build smoke     # cross-build the aarch64 smoke binary
-tools/zig.sh build product-check # compile the Zig product modules
-tools/zig.sh build test      # host unit tests
-tools/zig.sh build fmt-check # format check
+tools/bootstrap.sh
+tools/zig.sh build
+tools/zig.sh build test
+tools/zig.sh build fmt-check
 ```
 
-Build the release and PortMaster package with:
+Build the PortMaster package with:
 
 ```sh
-tools/build-release.sh
-PORTMASTER_NEW=/path/to/PortMaster-New tools/package-portmaster.sh
+PORTMASTER_NEW=/path/to/PortMaster-New tools/zig.sh build package
 ```
 
-I would recommend using a sparse checkout of [PortMaster-New](https://github.com/PortsMaster/PortMaster-New) because
-she's a big one. [Here is a great guide made by JeodC to help you with that](https://gist.github.com/JeodC/7a51211ad94ad6084d14042d80a62549).
+PortMaster-New is large. [JeodC's sparse-checkout guide](https://gist.github.com/JeodC/7a51211ad94ad6084d14042d80a62549)
+shows how to fetch only the files needed for packaging.
 
-`package-portmaster.sh` runs the current PortMaster-New checks and archive
-builder. To queue the finished archive for PortMaster's supported autoinstall
-flow:
+The package build runs the current PortMaster checks and archive builder. To
+queue the finished archive for PortMaster's supported autoinstall flow:
 
 ```sh
 tools/deploy.sh <ssh-host> zig-out/greenovercast.zip

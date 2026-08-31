@@ -19,29 +19,47 @@ source "$controlfolder/control.txt"
 [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
+# AmberELEC's shared GO-Super mapping exposes R36S R3 as Guide.
+case "$sdl_controllerconfig" in
+190000004b4800000011000000010000,GO-Super\ Gamepad,*guide:b15,*)
+  sdl_controllerconfig=${sdl_controllerconfig/,guide:b15,/,rightstick:b15,guide:b16,}
+  ;;
+esac
+
 GAMEDIR="/$directory/ports/greenovercast"
 cd "$GAMEDIR" || exit 1
 
+rocknix_h700_modules="$GAMEDIR/rocknix/h700/cedrus-modules"
+
+finish() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$CFW_NAME" = "ROCKNIX" ] && [ -x "$rocknix_h700_modules" ]; then
+    $ESUDO "$rocknix_h700_modules" unload ||
+      echo "Unable to unload the ROCKNIX H700 video decoder." >&2
+  fi
+  pm_finish
+  exit "$status"
+}
+trap finish EXIT HUP INT TERM
+
 fail() {
   pm_show_error "$1"
-  pm_finish
   exit 1
 }
 
 config_dir="$XDG_CONFIG_HOME/greenovercast"
-if [ "$CFW_NAME" = "knulli" ]; then
-  credential_dir="${XDG_RUNTIME_DIR:-/var/run}/greenovercast"
-else
-  credential_dir="$config_dir"
-fi
+artwork_cache_dir="$config_dir/artwork"
+credential_dir="$config_dir"
 
-mkdir -p "$config_dir" "$credential_dir" || fail "Unable to create GreenOvercast's storage."
+mkdir -p "$config_dir" "$credential_dir" "$artwork_cache_dir" || fail "Unable to create GreenOvercast's storage."
 chmod 700 "$credential_dir" || fail "Unable to protect GreenOvercast's private storage."
 
 credential_file="$credential_dir/tokens.bin"
 credential_key_file="$credential_dir/tokens.key"
 video_bootstrap_file="$credential_dir/h264-parameter-sets.bin"
 catalog_file="$credential_dir/catalog.tsv"
+settings_file="$config_dir/settings.tsv"
 log_file="$credential_dir/greenovercast.log"
 
 : >"$log_file"
@@ -52,10 +70,18 @@ for private_file in "$credential_file" "$credential_key_file" "$catalog_file"; d
   [ ! -e "$private_file" ] || chmod 600 "$private_file"
 done
 
+if [ "$CFW_NAME" = "ROCKNIX" ] && [ -f "$rocknix_h700_modules" ]; then
+  $ESUDO chmod +x "$rocknix_h700_modules"
+  $ESUDO "$rocknix_h700_modules" load ||
+    fail "Unable to start the ROCKNIX H700 video decoder."
+fi
+
 export GREENOVERCAST_TOKEN_FILE="$credential_file"
 export GREENOVERCAST_TOKEN_KEY_FILE="$credential_key_file"
 export GREENOVERCAST_H264_BOOTSTRAP_FILE="$video_bootstrap_file"
 export GREENOVERCAST_CATALOG_FILE="$catalog_file"
+export GREENOVERCAST_SETTINGS_FILE="$settings_file"
+export GREENOVERCAST_ARTWORK_CACHE_DIR="$artwork_cache_dir"
 export GREENOVERCAST_CEDAR_LIBRARY="$GAMEDIR/libgreenovercast-cedar.so"
 export GREENOVERCAST_MPP_LIBRARY="$GAMEDIR/libgreenovercast-mpp.so"
 export LD_LIBRARY_PATH="$GAMEDIR:${LD_LIBRARY_PATH:-}"
@@ -88,6 +114,4 @@ $ESUDO chmod +x "$GAMEDIR/webrtc_stream.aarch64"
 pm_platform_helper "$GAMEDIR/webrtc_stream.aarch64"
 "$GAMEDIR/webrtc_stream.aarch64" "$1"
 status=$?
-
-pm_finish
 exit "$status"
