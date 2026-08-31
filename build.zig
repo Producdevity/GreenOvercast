@@ -450,6 +450,13 @@ pub fn build(b: *std.Build) void {
     }).step);
 
     const test_step = b.step("test", "Run host unit tests");
+    const rocknix_build_regression_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/rocknix_build_regression_test.sh"),
+    });
+    rocknix_build_regression_test.setCwd(b.path("."));
+    test_step.dependOn(&rocknix_build_regression_test.step);
+
     const test_roots = [_][]const u8{
         "src/app/state.zig",
         "src/catalog/catalog_parser.zig",
