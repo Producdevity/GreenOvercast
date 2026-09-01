@@ -171,7 +171,7 @@ pub const Release = struct {
         return c.go_sdl_platform_controller(self.platform);
     }
 
-    fn drawLoading(self: *Release, heading: [*c]const u8, detail: [*c]const u8, action: [*c]const u8) void {
+    fn drawLoading(self: *Release, heading: [*c]const u8, detail: [*c]const u8, action: c.GoHandheldUiAction) void {
         c.go_handheld_ui_draw_loading(self.ui(), heading, detail, action);
     }
 
@@ -198,12 +198,12 @@ pub const Release = struct {
     }
 
     pub fn refreshAuth(self: *Release) Result {
-        self.drawLoading("SIGNING IN", "REFRESHING XBOX SESSION", null);
+        self.drawLoading("SIGNING IN", "REFRESHING XBOX SESSION", c.GO_HANDHELD_UI_ACTION_NONE);
         debug("Refreshing auth\n", .{});
         return switch (c.go_xbox_auth_refresh(self.auth)) {
             c.GO_XBOX_AUTH_OK => .ok,
             c.GO_XBOX_AUTH_REAUTH_REQUIRED => result: {
-                self.drawLoading("SIGN IN EXPIRED", "REQUESTING A NEW DEVICE CODE", null);
+                self.drawLoading("SIGN IN EXPIRED", "REQUESTING A NEW DEVICE CODE", c.GO_HANDHELD_UI_ACTION_NONE);
                 c.SDL_Delay(700);
                 break :result .reauth_required;
             },
@@ -231,7 +231,7 @@ pub const Release = struct {
             std.debug.print("Catalog service could not be initialized\n", .{});
             return .failed;
         };
-        self.drawLoading("LOADING LIBRARY", "CHECKING YOUR CLOUD GAMES", "B BACK");
+        self.drawLoading("LOADING LIBRARY", "CHECKING YOUR CLOUD GAMES", c.GO_HANDHELD_UI_ACTION_BACK);
         debug("Loading cloud catalog\n", .{});
         const result = self.catalog.?.load() catch |err| {
             if (err == error.EmptyCatalog)
@@ -261,7 +261,7 @@ pub const Release = struct {
     }
 
     pub fn signOut(self: *Release) Result {
-        self.drawLoading("SIGNING OUT", "REMOVING XBOX CREDENTIALS", null);
+        self.drawLoading("SIGNING OUT", "REMOVING XBOX CREDENTIALS", c.GO_HANDHELD_UI_ACTION_NONE);
         if (c.go_xbox_auth_sign_out(self.auth) != 0) {
             std.debug.print("Xbox credentials could not be removed\n", .{});
             return .failed;
@@ -274,7 +274,7 @@ pub const Release = struct {
 
     pub fn createSession(self: *Release) Result {
         if (self.title_id[0] == 0) return .failed;
-        self.drawLoading("STARTING GAME", "ALLOCATING CLOUD SESSION", "B CANCEL");
+        self.drawLoading("STARTING GAME", "ALLOCATING CLOUD SESSION", c.GO_HANDHELD_UI_ACTION_CANCEL);
         debug("Creating session ({s})\n", .{std.mem.sliceTo(&self.title_id, 0)});
         if (c.go_cloud_session_start_game(self.cloud, @ptrCast(&self.title_id)) < 0) {
             std.debug.print("Session creation failed\n", .{});

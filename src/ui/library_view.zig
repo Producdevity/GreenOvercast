@@ -1,4 +1,5 @@
 const std = @import("std");
+const controls = @import("control_icons.zig");
 const search = @import("catalog_search");
 const font = @import("pixel_font.zig");
 const settings = @import("persistent_settings.zig");
@@ -152,8 +153,16 @@ pub fn draw(
     if (view.count == 0) {
         const empty = if (view.collection == .favorites) "NO FAVORITES YET" else "NO MATCHING GAMES";
         font.text(renderer, 28, 206, 3, empty, style.muted());
-        font.text(renderer, 16, 434, 2, "LB/RB TAB  X SEARCH  START SETTINGS", style.bright());
-        font.text(renderer, 16, 458, 2, "B BACK", style.accent());
+        const primary = [_]controls.Prompt{
+            controls.Prompt.two(.left_bumper, .right_bumper, "TAB"),
+            controls.Prompt.one(controls.face(store.face_buttons, .x), "SEARCH"),
+            controls.Prompt.one(.start, "SETTINGS"),
+        };
+        const secondary = [_]controls.Prompt{
+            controls.Prompt.one(controls.face(store.face_buttons, .b), "BACK"),
+        };
+        controls.drawRow(renderer, 16, 431, &primary, style.bright());
+        controls.drawRow(renderer, 16, 455, &secondary, style.accent());
         c.SDL_RenderPresent(renderer);
         return;
     }
@@ -196,8 +205,19 @@ pub fn draw(
         else
             font.text(renderer, 452, 218, 2, "LOADING ART", style.muted());
     }
-    font.text(renderer, 16, 434, 2, "A PLAY  Y FAVORITE  X SEARCH  B BACK", style.bright());
-    font.text(renderer, 16, 458, 2, "LB/RB TAB  LT/RT LETTER  START SETTINGS", style.accent());
+    const primary = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(store.face_buttons, .a), "PLAY"),
+        controls.Prompt.one(controls.face(store.face_buttons, .y), "FAVORITE"),
+        controls.Prompt.one(controls.face(store.face_buttons, .x), "SEARCH"),
+        controls.Prompt.one(controls.face(store.face_buttons, .b), "BACK"),
+    };
+    const secondary = [_]controls.Prompt{
+        controls.Prompt.two(.left_bumper, .right_bumper, "TAB"),
+        controls.Prompt.two(.left_trigger, .right_trigger, "LETTER"),
+        controls.Prompt.one(.start, "SETTINGS"),
+    };
+    controls.drawRow(renderer, 16, 431, &primary, style.bright());
+    controls.drawRow(renderer, 16, 455, &secondary, style.accent());
     c.SDL_RenderPresent(renderer);
 }
 

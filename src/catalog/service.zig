@@ -255,7 +255,7 @@ pub const Service = struct {
                 self.uiHandle(),
                 "LOADING LIBRARY",
                 progress.ptr,
-                "B BACK",
+                c.GO_HANDHELD_UI_ACTION_BACK,
             );
             if (c.go_handheld_ui_cancel_requested(self.uiHandle()) != 0) return;
         }

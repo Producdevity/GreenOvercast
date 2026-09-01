@@ -1,4 +1,5 @@
 const std = @import("std");
+const controls = @import("control_icons.zig");
 const navigation = @import("navigation_repeat.zig");
 const font = @import("pixel_font.zig");
 const settings = @import("persistent_settings.zig");
@@ -46,7 +47,7 @@ pub fn run(
                 c.SDLK_UP => selected = previousRow(selected),
                 c.SDLK_DOWN => selected = nextRow(selected),
                 c.SDLK_RETURN => if (activate(selected, controller, store)) {
-                    const confirmation = confirmSignOut(renderer, controller, stop_requested, stop_context);
+                    const confirmation = confirmSignOut(renderer, controller, store.face_buttons, stop_requested, stop_context);
                     if (confirmation != .back) return confirmation;
                     dirty = true;
                 },
@@ -60,7 +61,7 @@ pub fn run(
                 switch (button) {
                     c.SDL_CONTROLLER_BUTTON_B => return .back,
                     c.SDL_CONTROLLER_BUTTON_A => if (activate(selected, controller, store)) {
-                        const confirmation = confirmSignOut(renderer, controller, stop_requested, stop_context);
+                        const confirmation = confirmSignOut(renderer, controller, store.face_buttons, stop_requested, stop_context);
                         if (confirmation != .back) return confirmation;
                         dirty = true;
                     },
@@ -168,7 +169,12 @@ fn draw(
 
     drawMappingExplanation(renderer, store.face_buttons);
     font.text(renderer, 18, 340, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
-    font.text(renderer, 16, 438, 2, "A CHANGE   DPAD MOVE   B BACK", style.bright());
+    const prompts = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(store.face_buttons, .a), "CHANGE"),
+        controls.Prompt.one(.dpad, "MOVE"),
+        controls.Prompt.one(controls.face(store.face_buttons, .b), "BACK"),
+    };
+    controls.drawRow(renderer, 16, 435, &prompts, style.bright());
     c.SDL_RenderPresent(renderer);
 }
 
@@ -194,18 +200,22 @@ fn drawMappingExplanation(renderer: *c.SDL_Renderer, mode: settings.FaceButtonMo
     font.text(renderer, 390, 96, 2, "INPUT MAPPING", style.muted());
     if (mode == .system) {
         font.text(renderer, 390, 142, 2, "SYSTEM", style.bright());
-        font.text(renderer, 390, 180, 2, "USE CFW", style.muted());
-        font.text(renderer, 390, 208, 2, "BUTTON MAP", style.muted());
+        controls.drawIcon(renderer, 390, 176, .a, style.accent());
+        controls.drawIcon(renderer, 416, 176, .b, style.accent());
+        controls.drawIcon(renderer, 442, 176, .x, style.accent());
+        controls.drawIcon(renderer, 468, 176, .y, style.accent());
+        font.text(renderer, 390, 208, 2, "CFW BUTTON MAP", style.muted());
     } else {
         font.text(renderer, 390, 142, 2, "SWAPPED", style.bright());
-        font.text(renderer, 390, 180, 2, "A / B", style.accent());
-        font.text(renderer, 390, 208, 2, "X / Y", style.accent());
+        controls.drawSwapPair(renderer, 390, 176, .a, .b, style.accent());
+        controls.drawSwapPair(renderer, 390, 208, .x, .y, style.accent());
     }
 }
 
 fn confirmSignOut(
     renderer: *c.SDL_Renderer,
     controller: *c.GoControllerInput,
+    face_buttons: settings.FaceButtonMode,
     stop_requested: StopRequested,
     stop_context: ?*anyopaque,
 ) Result {
@@ -213,7 +223,11 @@ fn confirmSignOut(
     _ = c.SDL_RenderClear(renderer);
     font.text(renderer, 164, 174, 4, "SIGN OUT?", style.bright());
     font.text(renderer, 110, 242, 2, "YOU WILL NEED TO LINK XBOX AGAIN", style.muted());
-    font.text(renderer, 192, 324, 2, "A YES    B NO", style.accent());
+    const prompts = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(face_buttons, .a), "YES"),
+        controls.Prompt.one(controls.face(face_buttons, .b), "NO"),
+    };
+    controls.drawCenteredRow(renderer, 319, &prompts, style.accent());
     c.SDL_RenderPresent(renderer);
     while (true) {
         var event: c.SDL_Event = undefined;
