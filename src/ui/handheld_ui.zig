@@ -1,5 +1,6 @@
 const std = @import("std");
 const artwork = @import("artwork_loader.zig");
+const controls = @import("control_icons.zig");
 const keyboard = @import("keyboard.zig");
 const library = @import("library_view.zig");
 const navigation = @import("navigation_repeat.zig");
@@ -87,7 +88,7 @@ fn cancelRequested(ui: *Ui) bool {
     return false;
 }
 
-fn drawLoading(ui: *Ui, heading: [*c]const u8, detail: [*c]const u8, action: [*c]const u8) void {
+fn drawLoading(ui: *Ui, heading: [*c]const u8, detail: [*c]const u8, action: c.GoHandheldUiAction) void {
     if (heading == null or detail == null) return;
     style.setColor(ui.renderer, style.background());
     _ = c.SDL_RenderClear(ui.renderer);
@@ -98,11 +99,29 @@ fn drawLoading(ui: *Ui, heading: [*c]const u8, detail: [*c]const u8, action: [*c
     font.text(ui.renderer, @divTrunc(style.display_width - heading_width, 2), 198, 4, heading, style.bright());
     const detail_width = font.textWidth(detail, 2);
     font.text(ui.renderer, @divTrunc(style.display_width - detail_width, 2), 270, 2, detail, style.accent());
-    if (action != null and action[0] != 0) {
-        const action_width = font.textWidth(action, 2);
-        font.text(ui.renderer, @divTrunc(style.display_width - action_width, 2), 444, 2, action, style.bright());
-    }
+    drawLoadingAction(ui, action);
     c.SDL_RenderPresent(ui.renderer);
+}
+
+fn drawLoadingAction(ui: *Ui, action: c.GoHandheldUiAction) void {
+    const mode = ui.settings.face_buttons;
+    if (action == c.GO_HANDHELD_UI_ACTION_BACK) {
+        const prompts = [_]controls.Prompt{
+            controls.Prompt.one(controls.face(mode, .b), "BACK"),
+        };
+        controls.drawCenteredRow(ui.renderer, 439, &prompts, style.bright());
+    } else if (action == c.GO_HANDHELD_UI_ACTION_CANCEL) {
+        const prompts = [_]controls.Prompt{
+            controls.Prompt.one(controls.face(mode, .b), "CANCEL"),
+        };
+        controls.drawCenteredRow(ui.renderer, 439, &prompts, style.bright());
+    } else if (action == c.GO_HANDHELD_UI_ACTION_RETRY_BACK) {
+        const prompts = [_]controls.Prompt{
+            controls.Prompt.one(controls.face(mode, .a), "RETRY"),
+            controls.Prompt.one(controls.face(mode, .b), "BACK"),
+        };
+        controls.drawCenteredRow(ui.renderer, 439, &prompts, style.bright());
+    }
 }
 
 fn signInAction(ui: *Ui) c_int {
@@ -206,8 +225,18 @@ fn drawKeyboard(
             x += width + keyboard.gap_width;
         }
     }
-    font.text(ui.renderer, 16, 408, 2, "A TYPE  X DELETE  Y CLEAR  B CANCEL", style.bright());
-    font.text(ui.renderer, 16, 440, 2, "DPAD MOVE             START APPLY", style.accent());
+    const primary = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(ui.settings.face_buttons, .a), "TYPE"),
+        controls.Prompt.one(controls.face(ui.settings.face_buttons, .x), "DELETE"),
+        controls.Prompt.one(controls.face(ui.settings.face_buttons, .y), "CLEAR"),
+        controls.Prompt.one(controls.face(ui.settings.face_buttons, .b), "CANCEL"),
+    };
+    const secondary = [_]controls.Prompt{
+        controls.Prompt.one(.dpad, "MOVE"),
+        controls.Prompt.one(.start, "APPLY"),
+    };
+    controls.drawRow(ui.renderer, 16, 405, &primary, style.bright());
+    controls.drawRow(ui.renderer, 16, 437, &secondary, style.accent());
     c.SDL_RenderPresent(ui.renderer);
 }
 
@@ -544,7 +573,7 @@ pub export fn go_handheld_ui_destroy(ui: ?*Ui) void {
     std.heap.c_allocator.destroy(handle);
 }
 
-pub export fn go_handheld_ui_draw_loading(ui: ?*Ui, heading: [*c]const u8, detail: [*c]const u8, action: [*c]const u8) void {
+pub export fn go_handheld_ui_draw_loading(ui: ?*Ui, heading: [*c]const u8, detail: [*c]const u8, action: c.GoHandheldUiAction) void {
     drawLoading(ui orelse return, heading, detail, action);
 }
 
@@ -582,7 +611,10 @@ pub export fn go_handheld_ui_draw_device_code(
         pointerString(status).?, seconds_remaining / 60, seconds_remaining % 60,
     }) catch return;
     font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(state.ptr, 2), 2), 378, 2, state.ptr, style.accent());
-    font.text(handle.renderer, 16, 444, 2, "B CANCEL", style.bright());
+    const prompts = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(handle.settings.face_buttons, .b), "CANCEL"),
+    };
+    controls.drawCenteredRow(handle.renderer, 439, &prompts, style.bright());
     c.SDL_RenderPresent(handle.renderer);
 }
 
@@ -606,7 +638,7 @@ pub export fn go_handheld_ui_sign_in_action(ui: ?*Ui) c_int {
 
 pub export fn go_handheld_ui_wait_for_retry(ui: ?*Ui, heading: [*c]const u8, detail: [*c]const u8) c_int {
     const handle = ui orelse return 0;
-    drawLoading(handle, heading, detail, "A RETRY   B BACK");
+    drawLoading(handle, heading, detail, c.GO_HANDHELD_UI_ACTION_RETRY_BACK);
     while (true) {
         const action = signInAction(handle);
         if (action != 0) return @intFromBool(action > 0);

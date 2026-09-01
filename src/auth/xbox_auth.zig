@@ -168,7 +168,7 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
             .{ .key = "client_id", .value = cString(&auth.client_id) },
             .{ .key = "scope", .value = oauth_scope },
         });
-        c.go_handheld_ui_draw_loading(ui, "XBOX SIGN IN", "REQUESTING A DEVICE CODE", "B BACK");
+        c.go_handheld_ui_draw_loading(ui, "XBOX SIGN IN", "REQUESTING A DEVICE CODE", c.GO_HANDHELD_UI_ACTION_BACK);
         var response = c.go_http_request(
             "POST",
             device_code_url,
@@ -248,7 +248,7 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
                         ui,
                         "SIGNED IN",
                         "OPENING YOUR CLOUD LIBRARY",
-                        null,
+                        c.GO_HANDHELD_UI_ACTION_NONE,
                     );
                     c.SDL_Delay(700);
                     return true;

@@ -18,12 +18,19 @@ enum {
     GO_HANDHELD_UI_PICK_SIGN_OUT = -2,
 };
 
+typedef enum {
+    GO_HANDHELD_UI_ACTION_NONE = 0,
+    GO_HANDHELD_UI_ACTION_BACK,
+    GO_HANDHELD_UI_ACTION_CANCEL,
+    GO_HANDHELD_UI_ACTION_RETRY_BACK,
+} GoHandheldUiAction;
+
 GoHandheldUi* go_handheld_ui_create(SDL_Renderer* renderer, GoControllerInput* controller,
                                     GoUiStopRequested stop_requested, void* stop_context);
 void go_handheld_ui_destroy(GoHandheldUi* ui);
 
 void go_handheld_ui_draw_loading(GoHandheldUi* ui, const char* heading, const char* detail,
-                                 const char* action);
+                                 GoHandheldUiAction action);
 void go_handheld_ui_draw_device_code(GoHandheldUi* ui, const char* user_code, const char* status,
                                      unsigned int seconds_remaining);
 int go_handheld_ui_wait(GoHandheldUi* ui, Uint32 milliseconds);

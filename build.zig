@@ -465,6 +465,7 @@ pub fn build(b: *std.Build) void {
         "src/input/guide_chord.zig",
         "src/session/message_protocol.zig",
         "src/ui/keyboard.zig",
+        "src/ui/control_icons.zig",
         "src/ui/navigation_repeat.zig",
         "src/ui/persistent_settings.zig",
         "src/ui/stream_dimensions.zig",
