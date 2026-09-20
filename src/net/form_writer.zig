@@ -1,5 +1,10 @@
 const std = @import("std");
 
+pub const Field = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 fn isUnreserved(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '.' or byte == '_' or
         byte == '~';
@@ -38,6 +43,28 @@ pub fn encode(input: []const u8, output: []u8) !usize {
     return cursor;
 }
 
+pub fn build(fields: []const Field, output: []u8) ![:0]u8 {
+    if (output.len == 0) return error.NoSpace;
+
+    var cursor: usize = 0;
+    for (fields, 0..) |field, index| {
+        if (index != 0) {
+            if (cursor + 1 >= output.len) return error.NoSpace;
+            output[cursor] = '&';
+            cursor += 1;
+        }
+
+        cursor += try encode(field.name, output[cursor..]);
+        if (cursor + 1 >= output.len) return error.NoSpace;
+        output[cursor] = '=';
+        cursor += 1;
+        cursor += try encode(field.value, output[cursor..]);
+    }
+
+    output[cursor] = 0;
+    return output[0..cursor :0];
+}
+
 test "encodes application form values and terminates them" {
     var output: [256]u8 = undefined;
     const input = "xboxlive.signin openid service::http://Passport.NET/?a=b&c=d";
@@ -54,4 +81,28 @@ test "preserves unreserved bytes and rejects undersized output" {
     const length = try encode("a-._~Z", &output);
     try std.testing.expectEqualStrings("a-._~Z", output[0..length]);
     try std.testing.expectError(error.NoSpace, encode("a/b", output[0..5]));
+}
+
+test "builds an encoded form body" {
+    var output: [128]u8 = undefined;
+    const body = try build(&.{
+        .{ .name = "grant_type", .value = "refresh_token" },
+        .{ .name = "scope", .value = "openid email" },
+        .{ .name = "device/id", .value = "a&b" },
+    }, &output);
+    try std.testing.expectEqualStrings(
+        "grant_type=refresh_token&scope=openid+email&device%2Fid=a%26b",
+        body,
+    );
+}
+
+test "build handles an empty form and rejects short destinations" {
+    var empty: [1]u8 = undefined;
+    try std.testing.expectEqualStrings("", try build(&.{}, &empty));
+
+    var short: [3]u8 = undefined;
+    try std.testing.expectError(
+        error.NoSpace,
+        build(&.{.{ .name = "a", .value = "b" }}, &short),
+    );
 }
