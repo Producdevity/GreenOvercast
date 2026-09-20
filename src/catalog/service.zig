@@ -1,5 +1,5 @@
 const std = @import("std");
-const parser = @import("catalog_parser.zig");
+const parser = @import("catalog_parser");
 
 const c = @cImport({
     @cInclude("cloud_session.h");
@@ -17,6 +17,7 @@ pub const LoadResult = enum {
 pub const PickResult = union(enum) {
     title_id: []const u8,
     cancelled,
+    change_provider,
     sign_out,
 };
 
@@ -115,6 +116,7 @@ pub const Service = struct {
             @intCast(self.count),
             @ptrCast(&requested_buffer),
         );
+        if (selected == c.GO_HANDHELD_UI_PICK_CHANGE_PROVIDER) return .change_provider;
         if (selected == c.GO_HANDHELD_UI_PICK_SIGN_OUT) return .sign_out;
         if (selected == c.GO_HANDHELD_UI_PICK_CANCELLED) return .cancelled;
         if (selected < 0) return error.InvalidSelection;

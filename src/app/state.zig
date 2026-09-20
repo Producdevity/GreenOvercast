@@ -32,8 +32,13 @@ pub const Event = enum {
     rtc_connected,
     session_ended,
     session_failed,
+    provider_changed,
     user_quit,
 };
+
+pub fn sessionCancellation(current: State, quit_requested: bool) Event {
+    return if (current == .streaming or quit_requested) .user_quit else .session_ended;
+}
 
 pub fn transition(current: State, event: Event) State {
     if (event == .user_quit)
@@ -60,11 +65,13 @@ pub fn transition(current: State, event: Event) State {
         },
         .loading_catalog => switch (event) {
             .catalog_loaded => .catalog,
+            .provider_changed => .cold_start,
             else => .loading_catalog,
         },
         .catalog => switch (event) {
             .user_select_title => .provisioning,
             .auth_sign_out => .signed_out,
+            .provider_changed => .cold_start,
             else => .catalog,
         },
         .provisioning => switch (event) {
@@ -124,6 +131,20 @@ test "sign out returns the catalog to authentication" {
     try std.testing.expectEqual(State.device_code_pending, state);
 }
 
+test "changing provider starts a fresh authentication flow" {
+    try std.testing.expectEqual(State.cold_start, transition(.catalog, .provider_changed));
+}
+
+test "catalog failure can return to service selection and reuse credentials" {
+    var state = transition(.loading_catalog, .provider_changed);
+    try std.testing.expectEqual(State.cold_start, state);
+    state = transition(state, .auth_tokens_found);
+    try std.testing.expectEqual(State.authenticating, state);
+    state = transition(state, .auth_success);
+    state = transition(state, .catalog_loaded);
+    try std.testing.expectEqual(State.catalog, state);
+}
+
 test "catalog selection reaches streaming" {
     var state = transition(.catalog, .user_select_title);
     try std.testing.expectEqual(State.provisioning, state);
@@ -141,6 +162,14 @@ test "ended and failed sessions return to the catalog" {
     try std.testing.expectEqual(State.catalog, transition(.connecting, .session_failed));
     try std.testing.expectEqual(State.catalog, transition(.signaling, .session_failed));
     try std.testing.expectEqual(State.catalog, transition(.provisioning, .session_failed));
+}
+
+test "cancelling game startup returns to the catalog while quit remains explicit" {
+    for ([_]State{ .provisioning, .signaling, .connecting }) |state| {
+        try std.testing.expectEqual(State.catalog, transition(state, sessionCancellation(state, false)));
+        try std.testing.expectEqual(State.shutdown, transition(state, sessionCancellation(state, true)));
+    }
+    try std.testing.expectEqual(Event.user_quit, sessionCancellation(.streaming, false));
 }
 
 test "shutdown is terminal and reachable from every active state" {

@@ -59,8 +59,9 @@ typedef struct {
 GoVideoPipeline* go_video_pipeline_create(const GoVideoPipelineConfig* config);
 int go_video_pipeline_start(GoVideoPipeline* pipeline);
 void go_video_pipeline_stop(GoVideoPipeline* pipeline);
+int go_video_pipeline_set_payload_type(GoVideoPipeline* pipeline, int payload_type);
 void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet, size_t length);
-void go_video_pipeline_render(GoVideoPipeline* pipeline);
+int go_video_pipeline_render(GoVideoPipeline* pipeline);
 int go_video_pipeline_needs_keyframe(const GoVideoPipeline* pipeline);
 int go_video_pipeline_has_media(const GoVideoPipeline* pipeline);
 int go_video_pipeline_failed(const GoVideoPipeline* pipeline);

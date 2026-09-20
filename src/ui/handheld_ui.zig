@@ -5,9 +5,12 @@ const keyboard = @import("keyboard.zig");
 const library = @import("library_view.zig");
 const navigation = @import("navigation_repeat.zig");
 const persistent = @import("persistent_settings.zig");
+const provider_picker = @import("provider_picker.zig");
+const provider_badge = @import("provider_badge.zig");
 const font = @import("pixel_font.zig");
 const settings_view = @import("settings_view.zig");
 const stream_dimensions = @import("stream_dimensions.zig");
+const stream_controls = @import("stream_controls.zig");
 const style = @import("view_style.zig");
 
 const c = @cImport({
@@ -26,10 +29,17 @@ const Ui = struct {
     stop_context: ?*anyopaque,
     settings: persistent.Store,
     artwork: artwork.Loader = .{},
+    provider: provider_badge.Provider = .xbox,
     cancelled: bool = false,
+    quit_requested: bool = false,
     stream_width: u32,
     stream_height: u32,
 };
+
+pub export fn go_handheld_ui_draw_stream_controls(ui: ?*Ui, mouse_mode: c_int, x: f32, y: f32, width: c_int, height: c_int, show_hint: c_int) void {
+    const value = ui orelse return;
+    stream_controls.draw(value.renderer, value.settings.face_buttons, mouse_mode != 0, x, y, width, height, show_hint != 0);
+}
 
 const ArtworkSelection = struct {
     title_index: ?usize = null,
@@ -73,9 +83,14 @@ fn cancelRequested(ui: *Ui) bool {
     while (c.SDL_PollEvent(&event) != 0) {
         c.go_controller_input_handle_event(ui.controller, &event);
         if (event.type == c.SDL_QUIT or
-            (event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_ESCAPE) or
-            (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event) and
-                semanticButton(ui, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_B))
+            (event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_ESCAPE))
+        {
+            ui.quit_requested = true;
+            ui.cancelled = true;
+            return true;
+        }
+        if (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event) and
+            semanticButton(ui, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_B)
         {
             ui.cancelled = true;
             return true;
@@ -128,6 +143,7 @@ fn signInAction(ui: *Ui) c_int {
     var event: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&event) != 0) {
         c.go_controller_input_handle_event(ui.controller, &event);
+        if (event.type == c.SDL_QUIT) ui.quit_requested = true;
         if (event.type == c.SDL_QUIT or
             (event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_ESCAPE) or
             (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event) and
@@ -136,8 +152,9 @@ fn signInAction(ui: *Ui) c_int {
             ui.cancelled = true;
             return -1;
         }
-        if (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event) and
-            semanticButton(ui, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_A) return 1;
+        if ((event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_RETURN) or
+            (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event) and
+                semanticButton(ui, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_A)) return 1;
     }
     if (shouldStop(ui)) {
         ui.cancelled = true;
@@ -218,7 +235,7 @@ fn drawKeyboard(
     for (keyboard.rows, 0..) |keys, row| {
         const row_width = keyboardRowWidth(keys);
         var x = @divTrunc(style.display_width - row_width, 2);
-        const y: c_int = @intCast(174 + row * 52);
+        const y: c_int = @intCast(158 + row * 46);
         for (keys, 0..) |key, column| {
             const width = @as(c_int, key.width_units) * keyboard.unit_width;
             drawKey(ui.renderer, x, y, width, key, row == selection.row and column == selection.column);
@@ -462,6 +479,7 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                         ui.renderer,
                         ui.controller,
                         &ui.settings,
+                        ui.provider,
                         ui.stop_requested,
                         ui.stop_context,
                     );
@@ -470,6 +488,7 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                         return c.GO_HANDHELD_UI_PICK_CANCELLED;
                     }
                     if (result == .sign_out) return c.GO_HANDHELD_UI_PICK_SIGN_OUT;
+                    if (result == .switch_provider) return c.GO_HANDHELD_UI_PICK_CHANGE_PROVIDER;
                     view.rebuild(&ui.settings, view.selectedTitleIndex());
                     dirty = true;
                 },
@@ -526,7 +545,7 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
             dirty = true;
         }
         if (dirty) {
-            library.draw(ui.renderer, &view, &ui.settings, artwork_texture);
+            library.draw(ui.renderer, &view, &ui.settings, artwork_texture, ui.provider);
             dirty = false;
         }
         c.SDL_Delay(16);
@@ -583,8 +602,19 @@ pub export fn go_handheld_ui_draw_device_code(
     status: [*c]const u8,
     seconds_remaining: c_uint,
 ) void {
+    go_handheld_ui_draw_device_code_for(ui, "XBOX SIGN IN", "MICROSOFT.COM/LINK", user_code, status, seconds_remaining);
+}
+
+pub export fn go_handheld_ui_draw_device_code_for(
+    ui: ?*Ui,
+    service: [*c]const u8,
+    address: [*c]const u8,
+    user_code: [*c]const u8,
+    status: [*c]const u8,
+    seconds_remaining: c_uint,
+) void {
     const handle = ui orelse return;
-    if (user_code == null or status == null) return;
+    if (service == null or address == null or user_code == null or status == null) return;
     style.setColor(handle.renderer, style.background());
     _ = c.SDL_RenderClear(handle.renderer);
     style.setColor(handle.renderer, style.panel());
@@ -596,13 +626,14 @@ pub export fn go_handheld_ui_draw_device_code(
     _ = c.SDL_RenderFillRect(handle.renderer, &footer);
     style.drawMark(handle.renderer);
     font.text(handle.renderer, 78, 12, 4, "GREENOVERCAST", style.bright());
-    font.text(handle.renderer, 80, 46, 2, "XBOX SIGN IN", style.accent());
+    font.text(handle.renderer, 80, 46, 2, service, style.accent());
     const heading = "SIGN IN ON ANOTHER DEVICE";
     font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(heading, 3), 2), 96, 3, heading, style.bright());
     const instruction = "OPEN THIS ADDRESS ON YOUR PHONE";
     font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(instruction, 2), 2), 148, 2, instruction, style.muted());
-    const address = "MICROSOFT.COM/LINK";
-    font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(address, 3), 2), 180, 3, address, style.accent());
+    const address_scale: c_int = if (font.textWidth(address, 3) <= style.display_width - 40) 3 else 2;
+    const address_x = @max(20, @divTrunc(style.display_width - font.textWidth(address, address_scale), 2));
+    font.textEllipsized(handle.renderer, address_x, 180, address_scale, address, style.display_width - 40, style.accent());
     const code_label = "ENTER THIS CODE";
     font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(code_label, 2), 2), 244, 2, code_label, style.muted());
     font.text(handle.renderer, @divTrunc(style.display_width - font.textWidth(user_code, 5), 2), 282, 5, user_code, style.bright());
@@ -616,6 +647,26 @@ pub export fn go_handheld_ui_draw_device_code(
     };
     controls.drawCenteredRow(handle.renderer, 439, &prompts, style.bright());
     c.SDL_RenderPresent(handle.renderer);
+}
+
+pub export fn go_handheld_ui_pick_provider(ui: ?*Ui) c_int {
+    const handle = ui orelse return @intFromEnum(provider_picker.Result.cancelled);
+    handle.cancelled = false;
+    return @intFromEnum(provider_picker.run(
+        handle.renderer,
+        handle.controller,
+        handle.settings.face_buttons,
+        handle.stop_requested,
+        handle.stop_context,
+    ));
+}
+
+pub export fn go_handheld_ui_set_provider(ui: ?*Ui, provider: c.GoHandheldUiProvider) void {
+    const handle = ui orelse return;
+    handle.provider = switch (provider) {
+        c.GO_HANDHELD_UI_PROVIDER_GEFORCE_NOW => .geforce_now,
+        else => .xbox,
+    };
 }
 
 pub export fn go_handheld_ui_wait(ui: ?*Ui, milliseconds: c.Uint32) c_int {
@@ -632,6 +683,11 @@ pub export fn go_handheld_ui_cancel_requested(ui: ?*Ui) c_int {
     return @intFromBool(cancelRequested(ui orelse return 1));
 }
 
+pub export fn go_handheld_ui_quit_requested(ui: ?*const Ui) c_int {
+    const handle = ui orelse return 1;
+    return @intFromBool(handle.quit_requested or shouldStop(handle));
+}
+
 pub export fn go_handheld_ui_sign_in_action(ui: ?*Ui) c_int {
     return signInAction(ui orelse return -1);
 }
@@ -642,6 +698,29 @@ pub export fn go_handheld_ui_wait_for_retry(ui: ?*Ui, heading: [*c]const u8, det
     while (true) {
         const action = signInAction(handle);
         if (action != 0) return @intFromBool(action > 0);
+        c.SDL_Delay(16);
+    }
+}
+
+pub export fn go_handheld_ui_show_error(ui: ?*Ui, heading: [*c]const u8, detail: [*c]const u8) void {
+    const handle = ui orelse return;
+    drawLoading(handle, heading, detail, c.GO_HANDHELD_UI_ACTION_BACK);
+    while (true) {
+        var event: c.SDL_Event = undefined;
+        while (c.SDL_PollEvent(&event) != 0) {
+            c.go_controller_input_handle_event(handle.controller, &event);
+            if (event.type == c.SDL_QUIT) {
+                handle.quit_requested = true;
+                return;
+            }
+            if (event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_ESCAPE) return;
+            if (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(handle, &event) and
+                semanticButton(handle, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_B) return;
+        }
+        if (shouldStop(handle) or c.go_controller_input_exit_held(handle.controller, 1000) != 0) {
+            handle.quit_requested = true;
+            return;
+        }
         c.SDL_Delay(16);
     }
 }

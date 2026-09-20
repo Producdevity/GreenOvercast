@@ -42,7 +42,15 @@ commit = "c08762ebfadeb4e986d2fed993bc7a54862d3ebe"
 license = "Apache-2.0 and MIT"
 linkage = "dynamic optional decoder plugin; firmware MPP preferred when compatible"
 build = "git submodule headers and private userspace library; tools/build-dependencies.sh and build.zig"
-status = "live cloud playback proven on RK3566 SpruceOS 4.2.0 and RK3326 AmberELEC prerelease-20250515; RK3326 dArkOS 4.4 offline 720p decode and frontend startup also proven"
+status = "live cloud playback proven on RK3566 SpruceOS 4.2.0/4.3.3 and RK3326 AmberELEC prerelease-20250515; GFN gameplay tested on RK3326 dArkOS 02012026, with uneven render cadence"
+
+[asset.provider_icons]
+source = "https://github.com/twbs/icons"
+commit = "6945b7006285d444cc17ff2e22c7691719229526"
+license = "MIT"
+nvidia_svg_sha256 = "3e1027070f7db94347d631ebf6299cc01a3e813610af743506f5acc1257aef81"
+xbox_svg_sha256 = "e73c5df7997cfec0f6deed44c8a160bb649af865789cafd688db9bedaaf42e1a"
+build = "icons/nvidia.svg and icons/xbox.svg rasterized to 24x24 alpha masks in src/ui/provider_badge.zig"
 
 [dep.libdatachannel]
 version = "v0.24.3"
@@ -65,7 +73,7 @@ version = "8.20.0"
 source = "https://curl.se/download/curl-8.20.0.tar.xz"
 sha256 = "63fe2dc148ba0ceae89922ef838f7e5c946272c2e78b7c59fab4b79d3ce2b896"
 license = "curl (MIT-style)"
-linkage = "static; HTTP and HTTPS only"
+linkage = "static; HTTP, HTTPS, and WebSocket"
 status = "source-built by tools/build-dependencies.sh"
 
 [dep.ffmpeg]
