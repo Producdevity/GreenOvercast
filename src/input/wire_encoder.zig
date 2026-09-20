@@ -33,6 +33,7 @@ pub const SourceButton = struct {
     pub const dpad_right: u32 = 1 << 11;
     pub const left_stick: u32 = 1 << 12;
     pub const right_stick: u32 = 1 << 13;
+    pub const guide: u32 = 1 << 14;
 };
 
 pub const GamepadState = struct {
@@ -69,8 +70,7 @@ pub fn buttonMask(source: u32) u16 {
         if (source & mapping[0] != 0) mask |= mapping[1];
     }
 
-    const stick_chord = SourceButton.left_stick | SourceButton.right_stick;
-    if (source & stick_chord == stick_chord) {
+    if (source & SourceButton.guide != 0) {
         mask |= Button.nexus;
     } else {
         if (source & SourceButton.left_stick != 0) mask |= Button.left_stick;
@@ -153,10 +153,9 @@ test "every physical control maps to the xCloud mask" {
     for (cases) |case| try std.testing.expectEqual(case[1], buttonMask(case[0]));
 }
 
-test "L3 and R3 together produce only Nexus" {
-    const chord = SourceButton.left_stick | SourceButton.right_stick;
-    try std.testing.expectEqual(Button.nexus, buttonMask(chord));
-    try std.testing.expectEqual(Button.a | Button.nexus, buttonMask(SourceButton.a | chord));
+test "semantic guide produces Nexus" {
+    try std.testing.expectEqual(Button.nexus, buttonMask(SourceButton.guide));
+    try std.testing.expectEqual(Button.a | Button.nexus, buttonMask(SourceButton.a | SourceButton.guide));
 }
 
 test "button A encodes correctly" {
