@@ -109,8 +109,10 @@ pub export fn go_audio_pipeline_create(device: c.SDL_AudioDeviceID) ?*Pipeline {
         c.opus_decoder_destroy(decoder);
         return null;
     }
-    errdefer c.opus_decoder_destroy(decoder);
-    const pipeline = std.heap.c_allocator.create(Pipeline) catch return null;
+    const pipeline = std.heap.c_allocator.create(Pipeline) catch {
+        c.opus_decoder_destroy(decoder);
+        return null;
+    };
     pipeline.* = .{ .device = device, .decoder = decoder };
     return pipeline;
 }

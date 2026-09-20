@@ -536,6 +536,20 @@ pub fn build(b: *std.Build) void {
 
     const fake_cedar_valid =
         addHostCFakeLibrary(b, "fake-cedar-valid", "tests/cedar_fake_valid.c");
+    const cedar_list_test = b.addExecutable(.{
+        .name = "cedar-list-test",
+        .root_source_file = null,
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    cedar_list_test.addIncludePath(b.path("vendor/cedarx/base/include"));
+    cedar_list_test.addCSourceFile(.{
+        .file = b.path("tests/cedar_list_test.c"),
+        .flags = &.{ "-std=gnu11", "-Wall", "-Wextra", "-Werror" },
+    });
+    cedar_list_test.linkLibC();
+    test_step.dependOn(&b.addRunArtifact(cedar_list_test).step);
+
     const cedar_decoder_test = addHostCExecutable(
         b,
         "video-decoder-cedar-test",

@@ -552,7 +552,10 @@ pub export fn go_video_pipeline_create(config_pointer: ?*const c.GoVideoPipeline
         .max_width = config.max_width,
         .max_height = config.max_height,
     };
-    errdefer _ = go_video_pipeline_destroy(pipeline);
+    var initialized = false;
+    defer if (!initialized) {
+        _ = go_video_pipeline_destroy(pipeline);
+    };
     if (config.bootstrap_path != null) {
         const path = std.mem.span(config.bootstrap_path);
         if (path.len >= pipeline.bootstrap_path.len) return null;
@@ -566,6 +569,7 @@ pub export fn go_video_pipeline_create(config_pointer: ?*const c.GoVideoPipeline
     if (pipeline.decoded_frame == null or pipeline.display_frame == null or pipeline.render_frame == null)
         return null;
     if (selectDecoder(pipeline, config.decoder_preference) != 0) return null;
+    initialized = true;
     return pipeline;
 }
 

@@ -32,7 +32,7 @@ static size_t find_start_code(const uint8_t* data, size_t length, size_t offset)
     return length;
 }
 
-static int submit_nal(GoCedarDecoder* decoder, const uint8_t* data, size_t length) {
+static int submit_access_unit(GoCedarDecoder* decoder, const uint8_t* data, size_t length) {
     if (length == 0 || length > INT32_MAX)
         return -1;
     char* first = NULL;
@@ -172,14 +172,9 @@ int go_cedar_v1_feed(GoCedarDecoder* decoder, const uint8_t* annex_b, size_t len
         set_error(decoder, "H.264 access unit is not Annex B");
         return -1;
     }
-    while (start < length) {
-        size_t prefix = annex_b[start + 2] == 1 ? 3u : 4u;
-        size_t end = find_start_code(annex_b, length, start + prefix);
-        if (submit_nal(decoder, annex_b + start, end - start) != 0) {
-            set_error(decoder, "Cedar stream buffer rejected a NAL unit");
-            return -1;
-        }
-        start = end;
+    if (submit_access_unit(decoder, annex_b + start, length - start) != 0) {
+        set_error(decoder, "Cedar stream buffer rejected an access unit");
+        return -1;
     }
 
     for (int attempt = 0; attempt < 64; ++attempt) {
@@ -187,6 +182,15 @@ int go_cedar_v1_feed(GoCedarDecoder* decoder, const uint8_t* annex_b, size_t len
         int copied = copy_newest_picture(decoder, frame);
         if (copied < 0)
             return -1;
+        if (result == VDECODE_RESULT_RESOLUTION_CHANGE) {
+            if (ReopenVideoEngine(decoder->decoder) != 0) {
+                set_error(decoder, "Cedar resolution change failed");
+                return -1;
+            }
+            if (copied > 0)
+                return 1;
+            continue;
+        }
         if (copied > 0)
             return 1;
         if (result == VDECODE_RESULT_NO_BITSTREAM || result == VDECODE_RESULT_CONTINUE ||
