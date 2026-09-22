@@ -505,6 +505,12 @@ pub fn build(b: *std.Build) void {
     });
     rocknix_build_regression_test.setCwd(b.path("."));
     test_step.dependOn(&rocknix_build_regression_test.step);
+    const dependency_toolchain_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/dependency_toolchain_test.sh"),
+    });
+    dependency_toolchain_test.setCwd(b.path("."));
+    test_step.dependOn(&dependency_toolchain_test.step);
 
     const tests = [_]struct {
         source: []const u8,

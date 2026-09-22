@@ -32,7 +32,7 @@ MPP_COMMIT=c08762ebfadeb4e986d2fed993bc7a54862d3ebe
   exit 1
 }
 
-for command_name in cmake curl make patch perl python3 tar; do
+for command_name in cmake curl make patch perl pkg-config python3 tar; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing build tool: $command_name" >&2
     exit 1
@@ -40,6 +40,11 @@ for command_name in cmake curl make patch perl python3 tar; do
 done
 
 mkdir -p "$DOWNLOADS" "$SOURCES" "$BUILDS" "$PREFIX" "$CROSS" "$TOOLS/cache/zig"
+
+# pkg-config's host search paths are independent of CMake's find root.
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
+export PKG_CONFIG_PATH=
+export PKG_CONFIG_SYSROOT_DIR=
 
 write_wrapper() {
   wrapper=$1
@@ -77,6 +82,10 @@ chmod +x "$AR_WRAPPER" "$RANLIB_WRAPPER"
   printf '%s\n' 'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)'
   printf '%s\n' 'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)'
   printf '%s\n' 'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)'
+  printf 'set(ENV{PKG_CONFIG_LIBDIR} "%s")\n' "$PKG_CONFIG_LIBDIR"
+  printf '%s\n' 'set(ENV{PKG_CONFIG_PATH} "")'
+  printf '%s\n' 'set(ENV{PKG_CONFIG_SYSROOT_DIR} "")'
+  printf '%s\n' 'set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH FALSE)'
 } >"$TOOLCHAIN"
 
 if [ "${1:-}" = "--toolchain-only" ]; then
@@ -270,9 +279,9 @@ if [ ! -f "$BUILDS/.curl-8.20.0-static-http-ws" ]; then
   : >"$BUILDS/.curl-8.20.0-static-http-ws"
 fi
 
-if [ ! -f "$BUILDS/.sdl2-2.28.5-link" ]; then
+if [ ! -f "$BUILDS/.sdl2-2.28.5-link-v2" ]; then
   sdl_build="$BUILDS/SDL2-2.28.5-link"
-  cmake -S "$SOURCES/SDL2-2.28.5" -B "$sdl_build" \
+  cmake --fresh -S "$SOURCES/SDL2-2.28.5" -B "$sdl_build" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_INSTALL_LIBDIR=lib \
@@ -298,7 +307,7 @@ if [ ! -f "$BUILDS/.sdl2-2.28.5-link" ]; then
     -DSDL_FCITX=OFF
   cmake --build "$sdl_build" --parallel
   cmake --install "$sdl_build"
-  : >"$BUILDS/.sdl2-2.28.5-link"
+  : >"$BUILDS/.sdl2-2.28.5-link-v2"
 fi
 
 if [ ! -f "$BUILDS/.libudev-zero-1.0.3-static" ]; then
@@ -335,7 +344,6 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
   (
     cd "$ffmpeg_build"
     env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS \
-      PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
       "$ffmpeg_source/configure" \
       --prefix="$PREFIX" \
       --arch=aarch64 \
