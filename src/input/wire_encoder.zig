@@ -65,17 +65,14 @@ pub fn buttonMask(source: u32) u16 {
         .{ SourceButton.dpad_down, Button.dpad_down },
         .{ SourceButton.dpad_left, Button.dpad_left },
         .{ SourceButton.dpad_right, Button.dpad_right },
+        .{ SourceButton.guide, Button.nexus },
+        .{ SourceButton.left_stick, Button.left_stick },
+        .{ SourceButton.right_stick, Button.right_stick },
     };
     for (mappings) |mapping| {
         if (source & mapping[0] != 0) mask |= mapping[1];
     }
 
-    if (source & SourceButton.guide != 0) {
-        mask |= Button.nexus;
-    } else {
-        if (source & SourceButton.left_stick != 0) mask |= Button.left_stick;
-        if (source & SourceButton.right_stick != 0) mask |= Button.right_stick;
-    }
     return mask;
 }
 
@@ -156,6 +153,17 @@ test "every physical control maps to the xCloud mask" {
 test "semantic guide produces Nexus" {
     try std.testing.expectEqual(Button.nexus, buttonMask(SourceButton.guide));
     try std.testing.expectEqual(Button.a | Button.nexus, buttonMask(SourceButton.a | SourceButton.guide));
+}
+
+test "guide preserves independent stick clicks" {
+    const cases = [_]struct { u32, u16 }{
+        .{ SourceButton.left_stick, Button.left_stick },
+        .{ SourceButton.right_stick, Button.right_stick },
+        .{ SourceButton.left_stick | SourceButton.right_stick, Button.left_stick | Button.right_stick },
+    };
+    for (cases) |pair| {
+        try std.testing.expectEqual(Button.nexus | pair[1], buttonMask(SourceButton.guide | pair[0]));
+    }
 }
 
 test "button A encodes correctly" {

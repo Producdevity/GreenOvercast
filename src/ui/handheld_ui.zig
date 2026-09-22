@@ -85,7 +85,7 @@ fn cancelRequested(ui: *Ui) bool {
         if (event.type == c.SDL_QUIT or
             (event.type == c.SDL_KEYDOWN and event.key.keysym.sym == c.SDLK_ESCAPE))
         {
-            ui.quit_requested = true;
+            if (event.type == c.SDL_QUIT) ui.quit_requested = true;
             ui.cancelled = true;
             return true;
         }
