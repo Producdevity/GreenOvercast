@@ -20,6 +20,22 @@ const maximum_tracks = 8;
 const maximum_channels = 8;
 const maximum_bitrate_kbps = 6000;
 
+const EarlyIceCandidates = struct {
+    messages: std.BoundedArray(signaling_protocol.DecodedMessage, 32) = .{},
+
+    fn append(self: *EarlyIceCandidates, message: *signaling_protocol.DecodedMessage) !void {
+        const candidate = message.payload.ice;
+        if (signaling_protocol.isTcpIceCandidate(candidate.candidate)) return;
+        self.messages.append(message.*) catch return error.TooManyEarlyIceCandidates;
+        message.* = .{ .allocator = message.allocator };
+    }
+
+    fn deinit(self: *EarlyIceCandidates) void {
+        for (self.messages.slice()) |*message| message.deinit();
+        self.messages.len = 0;
+    }
+};
+
 fn debugEnabled() bool {
     return std.posix.getenv("GREENOVERCAST_DEBUG") != null;
 }
@@ -175,7 +191,9 @@ pub const Session = struct {
             self.height,
         );
 
-        const offer = try self.waitForOffer();
+        var early_candidates: EarlyIceCandidates = .{};
+        defer early_candidates.deinit();
+        const offer = try self.waitForOffer(&early_candidates);
         defer self.allocator.free(offer);
         const sanitized = try sdp_protocol.sanitizeOffer(
             self.allocator,
@@ -202,6 +220,8 @@ pub const Session = struct {
         defer self.allocator.free(offer_z);
         if (c.rtcSetRemoteDescription(self.peer, offer_z.ptr, "offer") < 0)
             return error.RemoteDescriptionFailed;
+        for (early_candidates.messages.constSlice()) |*message| try self.handleSignaling(message);
+        early_candidates.deinit();
         if (self.cloud.media_ip != null and self.cloud.media_port != null) {
             if (try sdp_protocol.mediaHostCandidate(
                 self.allocator,
@@ -352,7 +372,7 @@ pub const Session = struct {
         allocator.destroy(self);
     }
 
-    fn waitForOffer(self: *Session) ![]u8 {
+    fn waitForOffer(self: *Session, early_candidates: *EarlyIceCandidates) ![]u8 {
         const deadline = c.SDL_GetTicks() +% 30_000;
         while (!deadlineReached(c.SDL_GetTicks(), deadline)) {
             if (try self.signaling.?.poll()) |message_value| {
@@ -361,6 +381,7 @@ pub const Session = struct {
                 if (message.peer_removed) return error.RemotePeerRemoved;
                 switch (message.payload) {
                     .offer => |offer| return self.allocator.dupe(u8, offer),
+                    .ice => try early_candidates.append(&message),
                     .bye => return error.SignalingClosed,
                     else => {},
                 }
@@ -749,6 +770,56 @@ fn writeUrlComponent(writer: anytype, value: []const u8) !void {
             try writer.writeByte('%');
             try writer.writeByte(hex[byte >> 4]);
             try writer.writeByte(hex[byte & 0x0f]);
+        }
+    }
+}
+
+test "early ICE candidates retain ownership and arrival order until the offer" {
+    var pending: EarlyIceCandidates = .{};
+    defer pending.deinit();
+    const inputs = [_][]const u8{
+        \\{"peer_msg":{"from":7,"msg":"{\"candidate\":\"candidate:1 1 UDP 1 192.0.2.1 10000 typ host\",\"sdpMid\":\"video\"}"}}
+        ,
+        \\{"peer_msg":{"from":7,"msg":"{\"candidate\":\"candidate:2 1 UDP 1 192.0.2.2 10001 typ host\"}"}}
+    };
+    for (inputs) |input| {
+        var message = try signaling_protocol.decode(std.testing.allocator, input);
+        defer message.deinit();
+        try pending.append(&message);
+        try std.testing.expect(message.payload == .none);
+    }
+    try std.testing.expectEqual(@as(usize, 2), pending.messages.len);
+    const messages = pending.messages.constSlice();
+    try std.testing.expectEqualStrings("candidate:1 1 UDP 1 192.0.2.1 10000 typ host", messages[0].payload.ice.candidate);
+    try std.testing.expectEqualStrings("video", messages[0].payload.ice.sdp_mid.?);
+    try std.testing.expectEqualStrings("candidate:2 1 UDP 1 192.0.2.2 10001 typ host", messages[1].payload.ice.candidate);
+    try std.testing.expect(messages[1].payload.ice.sdp_mid == null);
+    pending.deinit();
+    try std.testing.expectEqual(@as(usize, 0), pending.messages.len);
+}
+
+test "early ICE ignores TCP and leaves ownership with the caller on overflow" {
+    var pending: EarlyIceCandidates = .{};
+    defer pending.deinit();
+    var tcp = try signaling_protocol.decode(std.testing.allocator,
+        \\{"peer_msg":{"msg":"{\"candidate\":\"candidate:1 1 TCP 1 192.0.2.1 10000 typ host tcptype passive\"}"}}
+    );
+    defer tcp.deinit();
+    try pending.append(&tcp);
+    try std.testing.expectEqual(@as(usize, 0), pending.messages.len);
+    try std.testing.expect(tcp.payload == .ice);
+
+    for (0..pending.messages.buffer.len + 1) |index| {
+        var message = try signaling_protocol.decode(std.testing.allocator,
+            \\{"peer_info":{"id":7,"name":"server"},"peer_msg":{"msg":"{\"candidate\":\"candidate:1 1 UDP 1 192.0.2.1 10000 typ host\",\"usernameFragment\":\"test\"}"}}
+        );
+        defer message.deinit();
+        if (index < pending.messages.buffer.len) {
+            try pending.append(&message);
+            try std.testing.expect(message.peer_info == null);
+        } else {
+            try std.testing.expectError(error.TooManyEarlyIceCandidates, pending.append(&message));
+            try std.testing.expect(message.payload == .ice);
         }
     }
 }
