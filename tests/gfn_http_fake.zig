@@ -9,16 +9,24 @@ const Response = extern struct {
 pub var requests: usize = 0;
 pub var polls: usize = 0;
 pub var cancelled = false;
+pub var cancel_on_poll: usize = 1;
 pub var response: ?*Response = null;
 
 pub fn reset() void {
     requests = 0;
     polls = 0;
     cancelled = false;
+    cancel_on_poll = 1;
     response = null;
 }
 
 var no_content = Response{ .data = null, .len = 0, .status = 204 };
+var json_response: Response = undefined;
+
+pub fn replyJson(data: []const u8) void {
+    json_response = .{ .data = @constCast(data.ptr), .len = data.len, .status = 200 };
+    response = &json_response;
+}
 
 pub fn replyNoContent() void {
     response = &no_content;
@@ -56,7 +64,9 @@ export fn go_http_request_bounded_cancelable(
     context: ?*anyopaque,
 ) ?*Response {
     requests += 1;
-    if (cancel) |check| std.debug.assert(check(context) == 1);
+    if (cancel) |check| {
+        if (check(context) != 0) return null;
+    }
     return response;
 }
 
@@ -81,7 +91,7 @@ export fn go_http_request_bounded(
 
 export fn go_handheld_ui_cancel_requested(_: ?*anyopaque) c_int {
     polls += 1;
-    if (cancelled) return 0;
+    if (cancelled or polls < cancel_on_poll) return 0;
     cancelled = true;
     return 1;
 }

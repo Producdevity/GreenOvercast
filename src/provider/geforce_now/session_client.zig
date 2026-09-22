@@ -74,6 +74,7 @@ pub const Client = struct {
         if (self.streaming_url) |url| self.allocator.free(url);
         self.streaming_url = null;
         self.streaming_url = self.resolveStreamingUrl(provider_url, bearer) catch |err| fallback: {
+            if (err == error.Cancelled) return err;
             std.debug.print("GeForce NOW region discovery failed: {s}\n", .{@errorName(err)});
             break :fallback try self.allocator.dupe(u8, provider_url);
         };
@@ -432,15 +433,19 @@ pub const Client = struct {
             "nv-device-type: DESKTOP",
             "User-Agent: " ++ user_agent,
         };
-        const response = c.go_http_request_bounded(
+        const response = c.go_http_request_bounded_cancelable(
             "GET",
             url.ptr,
             null,
             @ptrCast(&headers),
             headers.len,
             1024 * 1024,
+            requestCancelled,
+            self,
         );
         defer c.go_http_response_destroy(response);
+        if (response == null and c.go_handheld_ui_cancelled(self.ui) != 0)
+            return error.Cancelled;
         if (response == null or response.*.status < 200 or response.*.status >= 300 or
             response.*.data == null)
         {
@@ -476,15 +481,19 @@ pub const Client = struct {
             "nv-device-type: DESKTOP",
             "User-Agent: " ++ user_agent,
         };
-        const response = c.go_http_request_bounded(
+        const response = c.go_http_request_bounded_cancelable(
             "GET",
             url.ptr,
             null,
             @ptrCast(&headers),
             headers.len,
             1024 * 1024,
+            requestCancelled,
+            self,
         );
         defer c.go_http_response_destroy(response);
+        if (response == null and c.go_handheld_ui_cancelled(self.ui) != 0)
+            return error.Cancelled;
         if (response == null or response.*.status < 200 or response.*.status >= 300 or
             response.*.data == null)
             return error.ServerInfoRequestFailed;
@@ -688,4 +697,36 @@ test "ended sessions stop polling and deletion accepts an empty success response
     try std.testing.expect(client.session == null);
     try std.testing.expectEqual(@as(usize, 1), http.requests);
     try std.testing.expectEqual(@as(usize, 0), http.polls);
+}
+
+test "membership and region discovery requests preserve cancellation" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+    };
+    http.cancel_on_poll = 2;
+    http.replyJson(
+        \\{"requestStatus":{"statusCode":1,"serverId":"TEST"}}
+    );
+    try std.testing.expectError(error.Cancelled, client.selectStreamMode(
+        "https://example.invalid/",
+        auth.bearer().?,
+        640,
+        480,
+    ));
+    try std.testing.expectEqual(@as(usize, 2), http.requests);
+    try std.testing.expectEqual(@as(usize, 2), http.polls);
+
+    http.reset();
+    try std.testing.expectError(error.Cancelled, client.resolveStreamingUrl(
+        "https://example.invalid/",
+        auth.bearer().?,
+    ));
+    try std.testing.expectEqual(@as(usize, 1), http.requests);
+    try std.testing.expectEqual(@as(usize, 1), http.polls);
 }
