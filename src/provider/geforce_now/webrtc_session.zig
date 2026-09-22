@@ -487,7 +487,11 @@ pub const Session = struct {
                 if (signaling_protocol.isTcpIceCandidate(candidate.candidate)) return;
                 const value = try self.allocator.dupeZ(u8, candidate.candidate);
                 defer self.allocator.free(value);
-                const mid_value = candidate.sdp_mid orelse "0";
+                const mid_value = try sdp_protocol.iceCandidateMid(
+                    self.offer orelse return error.MissingOffer,
+                    candidate.sdp_mid,
+                    candidate.sdp_m_line_index,
+                );
                 const mid = try self.allocator.dupeZ(u8, mid_value);
                 defer self.allocator.free(mid);
                 if (c.rtcAddRemoteCandidate(self.peer, value.ptr, mid.ptr) < 0)

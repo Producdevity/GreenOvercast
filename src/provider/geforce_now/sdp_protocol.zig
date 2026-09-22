@@ -116,6 +116,30 @@ pub fn buildNvstAnswer(
     );
 }
 
+pub fn iceCandidateMid(sdp: []const u8, mid: ?[]const u8, media_index: ?u32) ![]const u8 {
+    if (mid) |value| {
+        if (value.len != 0) return value;
+    }
+    var remaining = media_index orelse return "0";
+    var in_section = false;
+    var lines = std.mem.splitScalar(u8, sdp, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimRight(u8, raw, "\r");
+        if (std.mem.startsWith(u8, line, "m=")) {
+            if (in_section) break;
+            if (remaining == 0) {
+                in_section = true;
+            } else {
+                remaining -= 1;
+            }
+        } else if (in_section and std.mem.startsWith(u8, line, "a=mid:")) {
+            if (line.len == "a=mid:".len) break;
+            return line["a=mid:".len..];
+        }
+    }
+    return if (in_section) error.IceMediaIdMissing else error.IceMediaSectionNotFound;
+}
+
 pub fn codecPayloadType(sdp: []const u8, codec: []const u8) ?u8 {
     var lines = std.mem.splitScalar(u8, sdp, '\n');
     while (lines.next()) |raw_line| {
@@ -424,6 +448,31 @@ test "media endpoint becomes a UDP host candidate" {
         "candidate:1 1 UDP 2122260223 203.0.113.10 49005 typ host",
         candidate,
     );
+}
+
+test "ICE media indices resolve to SDP mids rather than numeric identifiers" {
+    const offer = "v=0\r\na=mid:session\r\n" ++
+        "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:video-main\r\n" ++
+        "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:42\r\n" ++
+        "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=mid:input\r\n";
+    try std.testing.expectEqualStrings("video-main", try iceCandidateMid(offer, null, 0));
+    try std.testing.expectEqualStrings("42", try iceCandidateMid(offer, null, 1));
+    try std.testing.expectEqualStrings("input", try iceCandidateMid(offer, "", 2));
+    try std.testing.expectEqualStrings("explicit", try iceCandidateMid(offer, "explicit", 100));
+    try std.testing.expectEqualStrings("0", try iceCandidateMid(offer, null, null));
+    try std.testing.expectError(error.IceMediaSectionNotFound, iceCandidateMid(offer, null, 3));
+    try std.testing.expectError(error.IceMediaSectionNotFound, iceCandidateMid(offer, null, std.math.maxInt(u32)));
+}
+
+test "ICE media lookup does not borrow a mid from a different section" {
+    const offer = "v=0\na=mid:session\n" ++
+        "m=video 0 RTP/AVP 96\n" ++
+        "m=audio 9 RTP/AVP 111\na=mid:audio\n" ++
+        "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\na=mid:\n";
+    try std.testing.expectError(error.IceMediaIdMissing, iceCandidateMid(offer, null, 0));
+    try std.testing.expectEqualStrings("audio", try iceCandidateMid(offer, null, 1));
+    try std.testing.expectError(error.IceMediaIdMissing, iceCandidateMid(offer, null, 2));
+    try std.testing.expectError(error.IceMediaSectionNotFound, iceCandidateMid("", null, 0));
 }
 
 test "media candidate accepts an Alliance host and rejects control ports" {
