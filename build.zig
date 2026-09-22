@@ -50,6 +50,7 @@ const release_zig_roots = [_]struct {
         .imports = &.{
             .{ .name = "json_reader", .path = "src/net/json_reader.zig" },
             .{ .name = "json_writer", .path = "src/net/json_writer.zig" },
+            .{ .name = "uuid", .path = "src/util/uuid.zig" },
         },
     },
     .{ .name = "greenovercast-controller", .path = "src/input/controller.zig" },
