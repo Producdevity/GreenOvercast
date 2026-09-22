@@ -175,7 +175,7 @@ pub fn parseGrantTokens(
     defer parsed.deinit();
     const object = try rootObject(parsed.value);
 
-    const lifetime = optionalUnsigned(object, "expires_in") orelse default_token_lifetime_seconds;
+    const lifetime = try tokenLifetime(object);
     return parseTokensObject(allocator, object, try expiryFromLifetime(issued_at, lifetime));
 }
 
@@ -288,7 +288,7 @@ pub fn mergeRefreshedTokens(
         previous.client_token,
     );
     errdefer if (client_token) |token| secureFree(allocator, token);
-    const lifetime = optionalUnsigned(object, "expires_in") orelse default_token_lifetime_seconds;
+    const lifetime = try tokenLifetime(object);
 
     return .{
         .allocator = allocator,
@@ -403,6 +403,11 @@ fn optionalUnsigned(object: std.json.ObjectMap, name: []const u8) ?u32 {
     };
 }
 
+fn tokenLifetime(object: std.json.ObjectMap) !u32 {
+    if (!object.contains("expires_in")) return default_token_lifetime_seconds;
+    return optionalUnsigned(object, "expires_in") orelse error.InvalidField;
+}
+
 fn secureFree(allocator: std.mem.Allocator, value: []u8) void {
     std.crypto.secureZero(u8, value);
     allocator.free(value);
@@ -498,6 +503,33 @@ test "stored tokens retain their absolute expiry" {
     try std.testing.expect(!tokens.needsRefresh(1_234_566_000));
     try std.testing.expect(tokens.needsRefresh(1_234_567_400));
     try std.testing.expect(tokens.needsRefresh(1_234_567_890));
+}
+
+test "token lifetime defaults only when omitted in grant and refresh responses" {
+    var previous = try parseGrantTokens(std.testing.allocator, "{\"access_token\":\"old\"}", 1000);
+    defer previous.deinit();
+    try std.testing.expectEqual(1000 + @as(i64, default_token_lifetime_seconds), previous.expires_at);
+
+    var refreshed = try mergeRefreshedTokens(std.testing.allocator, &previous, "{\"access_token\":\"new\"}", 2000);
+    defer refreshed.deinit();
+    try std.testing.expectEqual(2000 + @as(i64, default_token_lifetime_seconds), refreshed.expires_at);
+
+    for ([_]u32{ 0, 3600, std.math.maxInt(u32) }) |lifetime| {
+        var buffer: [128]u8 = undefined;
+        const data = try std.fmt.bufPrint(&buffer, "{{\"access_token\":\"new\",\"expires_in\":{d}}}", .{lifetime});
+        var grant = try parseGrantTokens(std.testing.allocator, data, 2000);
+        defer grant.deinit();
+        var refresh = try mergeRefreshedTokens(std.testing.allocator, &previous, data, 2000);
+        defer refresh.deinit();
+        try std.testing.expectEqual(2000 + @as(i64, lifetime), grant.expires_at);
+        try std.testing.expectEqual(grant.expires_at, refresh.expires_at);
+    }
+    for ([_][]const u8{ "-1", "4294967296", "3600.5", "null", "true", "\"3600\"" }) |value| {
+        var buffer: [128]u8 = undefined;
+        const data = try std.fmt.bufPrint(&buffer, "{{\"access_token\":\"new\",\"expires_in\":{s}}}", .{value});
+        try std.testing.expectError(error.InvalidField, parseGrantTokens(std.testing.allocator, data, 2000));
+        try std.testing.expectError(error.InvalidField, mergeRefreshedTokens(std.testing.allocator, &previous, data, 2000));
+    }
 }
 
 test "stored tokens require an expiry" {
