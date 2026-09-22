@@ -34,7 +34,7 @@ export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$host_prefix/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$host_prefix/lib/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR="$TEST_ROOT/host-sysroot"
 export CMAKE_PREFIX_PATH="$host_prefix"
-pkg-config --exists host-only
+pkg-config --print-errors --exists host-only
 sh "$fixture/tools/build-dependencies.sh" --toolchain-only
 
 cat >"$fixture/CMakeLists.txt" <<'EOF'

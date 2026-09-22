@@ -76,7 +76,7 @@ the tested dArkOS fork uses glibc 2.41.
 ## Build
 
 You need a Linux or macOS host with CMake 3.24+, `curl`, `git`, `make`, `patch`,
-`perl`, `pkg-config`, and `python3`.
+`perl`, `pkg-config`, `python3`, and `tar`.
 
 Host tests also need SDL2 development files: install
 `libsdl2-dev pkg-config` on Debian/Ubuntu or `sdl2 pkg-config` with Homebrew.
