@@ -70,8 +70,8 @@ GeForce NOW playback has been tested on muOS, Knulli, SpruceOS, and the R36S
 running dArkOS 02012026. R36S frame pacing still needs work. The ROCKNIX and
 AmberELEC rows above currently cover Xbox playback.
 
-The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
-supported.
+The release requires glibc 2.38 or newer. ArkOS (glibc 2.30) is not supported;
+the tested dArkOS fork uses glibc 2.41.
 
 ## Build
 

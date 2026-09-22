@@ -13,8 +13,8 @@
     ],
     "desc": "An unofficial Xbox Cloud Gaming and GeForce NOW client with a searchable, controller-first library for Linux handhelds.",
     "desc_md": null,
-    "inst": "Requires internet access and an Xbox cloud gaming or GeForce NOW account. Choose a service and follow the on-screen sign-in instructions.",
-    "inst_md": "Requires internet access and an Xbox cloud gaming or GeForce NOW account. Choose a service and follow the on-screen sign-in instructions.",
+    "inst": "Requires internet access and either a Game Pass plan with cloud gaming, or a GeForce NOW membership and access to the games you want to play. Choose a service and follow the on-screen sign-in instructions.",
+    "inst_md": "Requires internet access and either a Game Pass plan with cloud gaming, or a GeForce NOW membership and access to the games you want to play. Choose a service and follow the on-screen sign-in instructions.",
     "genres": [
       "other"
     ],
