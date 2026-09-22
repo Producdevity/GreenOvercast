@@ -5,6 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install host test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev pkg-config
       - run: tools/bootstrap.sh
       - run: tools/zig.sh build fmt-check
       - run: tools/zig.sh build test

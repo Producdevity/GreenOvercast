@@ -1,6 +1,7 @@
 #include "http_client.h"
 
 #include <curl/curl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +22,15 @@ typedef struct {
     void* context;
 } TransferCancel;
 
-static const char* find_ca_bundle(void) {
+static void print_http_result(FILE* stream, const char* prefix, const char* url,
+                              const char* suffix) {
+    const char* query = strchr(url, '?');
+    size_t visible_length = query ? (size_t)(query - url) : strlen(url);
+    int precision = visible_length > INT_MAX ? INT_MAX : (int)visible_length;
+    fprintf(stream, "%s%.*s%s%s", prefix, precision, url, query ? "?[redacted]" : "", suffix);
+}
+
+const char* go_http_ca_bundle(void) {
     const char* environment_paths[] = {
         getenv("CURL_CA_BUNDLE"),
         getenv("SSL_CERT_FILE"),
@@ -68,9 +77,8 @@ static size_t append_response(char* data, size_t size, size_t count, void* conte
     return length;
 }
 
-static int transfer_cancelled(void* context, curl_off_t download_total,
-                              curl_off_t download_current, curl_off_t upload_total,
-                              curl_off_t upload_current) {
+static int transfer_cancelled(void* context, curl_off_t download_total, curl_off_t download_current,
+                              curl_off_t upload_total, curl_off_t upload_current) {
     (void)download_total;
     (void)download_current;
     (void)upload_total;
@@ -90,10 +98,11 @@ int go_http_response_succeeded(const GoHttpResponse* response) {
     return response && response->status >= 200 && response->status < 300;
 }
 
-GoHttpResponse* go_http_request_bounded_cancelable(
-    const char* method, const char* url, const char* body, const char** headers,
-    int header_count, size_t response_limit, GoHttpCancelRequested cancel_requested,
-    void* cancel_context) {
+GoHttpResponse* go_http_request_bounded_cancelable(const char* method, const char* url,
+                                                   const char* body, const char** headers,
+                                                   int header_count, size_t response_limit,
+                                                   GoHttpCancelRequested cancel_requested,
+                                                   void* cancel_context) {
     if (!method || !url || response_limit == 0 || header_count < 0 ||
         (header_count > 0 && !headers))
         return NULL;
@@ -135,7 +144,7 @@ GoHttpResponse* go_http_request_bounded_cancelable(
     curl_easy_setopt(request, CURLOPT_WRITEDATA, &writer);
     curl_easy_setopt(request, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(request, CURLOPT_NOSIGNAL, 1L);
-    const char* ca_bundle = find_ca_bundle();
+    const char* ca_bundle = go_http_ca_bundle();
     if (ca_bundle)
         curl_easy_setopt(request, CURLOPT_CAINFO, ca_bundle);
     TransferCancel cancel = {.requested = cancel_requested, .context = cancel_context};
@@ -148,12 +157,23 @@ GoHttpResponse* go_http_request_bounded_cancelable(
     CURLcode result = curl_easy_perform(request);
     curl_easy_getinfo(request, CURLINFO_RESPONSE_CODE, &response->status);
     if (result != CURLE_OK) {
-        if (result != CURLE_ABORTED_BY_CALLBACK)
-            fprintf(stderr, "HTTP %s %s: %s\n", method, url, curl_easy_strerror(result));
+        if (result != CURLE_ABORTED_BY_CALLBACK) {
+            char prefix[64];
+            char suffix[160];
+            snprintf(prefix, sizeof(prefix), "HTTP %s ", method);
+            snprintf(suffix, sizeof(suffix), ": %s\n", curl_easy_strerror(result));
+            print_http_result(stderr, prefix, url, suffix);
+        }
         go_http_response_destroy(response);
         response = NULL;
     } else {
-        go_dbg("HTTP %ld %s (%zu bytes)\n", response->status, url, response->len);
+        if (go_debug_enabled()) {
+            char prefix[64];
+            char suffix[64];
+            snprintf(prefix, sizeof(prefix), "HTTP %ld ", response->status);
+            snprintf(suffix, sizeof(suffix), " (%zu bytes)\n", response->len);
+            print_http_result(stderr, prefix, url, suffix);
+        }
     }
 
     curl_slist_free_all(request_headers);

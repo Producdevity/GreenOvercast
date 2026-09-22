@@ -1,6 +1,7 @@
 const std = @import("std");
 const json_reader = @import("json_reader");
 const json_writer = @import("json_writer");
+const uuid = @import("uuid");
 const message_protocol = @import("message_protocol.zig");
 
 const c = @cImport({
@@ -31,7 +32,7 @@ const Session = struct {
     audio_track: c_int = -1,
     stream_width: c_uint,
     stream_height: c_uint,
-    install_id: [37]u8 = [_]u8{0} ** 37,
+    install_id: [uuid.string_length + 1]u8 = [_]u8{0} ** (uuid.string_length + 1),
     connected: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     gathering_complete: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     handshake_complete: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -67,26 +68,6 @@ fn messageData(data: [*c]const u8, size: c_int) ?[]const u8 {
     const signed_length: i64 = size;
     const length: usize = @intCast(if (signed_length < 0) -signed_length else signed_length);
     return data[0..length];
-}
-
-fn generateInstallId(output: *[37]u8) void {
-    var bytes: [16]u8 = undefined;
-    std.crypto.random.bytes(&bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    _ = std.fmt.bufPrintZ(
-        output,
-        "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-" ++
-            "{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}",
-        .{
-            bytes[0],  bytes[1],  bytes[2],  bytes[3],
-            bytes[4],  bytes[5],  bytes[6],  bytes[7],
-            bytes[8],  bytes[9],  bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15],
-        },
-    ) catch {
-        @memcpy(output, "00000000-0000-4000-8000-000000000000\x00");
-    };
 }
 
 fn onDescription(_: c_int, sdp: [*c]const u8, _: [*c]const u8, _: ?*anyopaque) callconv(.c) void {
@@ -332,7 +313,7 @@ pub export fn go_webrtc_session_create(
         .stream_width = stream_width,
         .stream_height = stream_height,
     };
-    generateInstallId(&session.install_id);
+    uuid.generate(&session.install_id);
     return session;
 }
 

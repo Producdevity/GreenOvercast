@@ -19,5 +19,8 @@ release. Full license texts for the bundled libraries ship alongside the port in
 | [libudev-zero](https://github.com/illiliti/libudev-zero)                        | ISC               | V4L2 media-device discovery (static)                         |
 | [SDL2](https://www.libsdl.org/)                                                 | Zlib              | Window, renderer, audio, and controller input (device)       |
 | [OpenSSL](https://www.openssl.org/)                                             | Apache-2.0        | TLS, WebRTC DTLS, and credential encryption (static)         |
-| [libcurl](https://curl.se/)                                                     | curl (MIT-style)  | HTTP for Xbox services (static)                              |
+| [libcurl](https://curl.se/)                                                     | curl (MIT-style)  | HTTP and WebSocket transport (static)                        |
 | [Opus](https://opus-codec.org/)                                                 | BSD-3-Clause      | Audio decode (static)                                        |
+
+Xbox and NVIDIA icons are from [Bootstrap Icons](https://github.com/twbs/icons)
+(MIT).

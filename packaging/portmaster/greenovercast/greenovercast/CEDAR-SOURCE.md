@@ -11,6 +11,7 @@ recipe is in `build.zig`.
 The maintained changes are limited to the aarch64/H616 port:
 
 - pointer-width-safe register addresses;
+- standard member-offset calculation for the linked-list helpers;
 - preservation of 32-bit H616 IOMMU addresses;
 - the H616 VE-version query;
 - corrected initialization, teardown, and codec-registration error paths;

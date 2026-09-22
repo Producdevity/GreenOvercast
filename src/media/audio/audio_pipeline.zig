@@ -6,7 +6,7 @@ const c = @cImport({
     @cInclude("opus/opus.h");
 });
 
-const payload_type = 111;
+const default_payload_type = 111;
 const queue_capacity = 32;
 const target_pending_packets = 2;
 const packet_capacity = 2048;
@@ -31,6 +31,7 @@ const Pipeline = struct {
     thread: ?std.Thread = null,
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     accepting_packets: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    payload_type: std.atomic.Value(u8) = std.atomic.Value(u8).init(default_payload_type),
     rtp_packets: std.atomic.Value(c_int) = std.atomic.Value(c_int).init(0),
     decoded_packets: std.atomic.Value(c_int) = std.atomic.Value(c_int).init(0),
     dropped_packets: std.atomic.Value(c_int) = std.atomic.Value(c_int).init(0),
@@ -109,8 +110,10 @@ pub export fn go_audio_pipeline_create(device: c.SDL_AudioDeviceID) ?*Pipeline {
         c.opus_decoder_destroy(decoder);
         return null;
     }
-    errdefer c.opus_decoder_destroy(decoder);
-    const pipeline = std.heap.c_allocator.create(Pipeline) catch return null;
+    const pipeline = std.heap.c_allocator.create(Pipeline) catch {
+        c.opus_decoder_destroy(decoder);
+        return null;
+    };
     pipeline.* = .{ .device = device, .decoder = decoder };
     return pipeline;
 }
@@ -149,6 +152,17 @@ pub export fn go_audio_pipeline_stop(pipeline_pointer: ?*Pipeline) void {
     pipeline.mutex.unlock();
 }
 
+pub export fn go_audio_pipeline_set_payload_type(
+    pipeline_pointer: ?*Pipeline,
+    payload_type: c_int,
+) c_int {
+    const pipeline = pipeline_pointer orelse return -1;
+    if (payload_type < 0 or payload_type > 127 or pipeline.rtp_packets.load(.acquire) != 0)
+        return -1;
+    pipeline.payload_type.store(@intCast(payload_type), .release);
+    return 0;
+}
+
 pub export fn go_audio_pipeline_push_rtp(
     pipeline_pointer: ?*Pipeline,
     packet_pointer: ?[*]const u8,
@@ -158,7 +172,8 @@ pub export fn go_audio_pipeline_push_rtp(
     const packet = packet_pointer orelse return;
     if (!pipeline.accepting_packets.load(.acquire)) return;
     const parsed = rtp.parse(packet[0..length]) catch return;
-    if (parsed.header.payload_type != payload_type or parsed.payload.len == 0) return;
+    if (parsed.header.payload_type != pipeline.payload_type.load(.acquire) or
+        parsed.payload.len == 0) return;
     _ = pipeline.rtp_packets.fetchAdd(1, .monotonic);
     if (parsed.payload.len > packet_capacity) {
         _ = pipeline.dropped_packets.fetchAdd(1, .monotonic);

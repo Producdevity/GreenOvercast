@@ -11,10 +11,10 @@
     "porter": [
       "Producdevity"
     ],
-    "desc": "An unofficial native Xbox Cloud Gaming client with a searchable, controller-first library for Linux handhelds.",
+    "desc": "An unofficial Xbox Cloud Gaming and GeForce NOW client with a searchable, controller-first library for Linux handhelds.",
     "desc_md": null,
-    "inst": "Requires an Xbox Game Pass plan that includes cloud gaming and internet access. First launch uses Microsoft's device-code sign-in.",
-    "inst_md": "Requires an Xbox Game Pass plan that includes cloud gaming and internet access. First launch uses Microsoft's device-code sign-in.",
+    "inst": "Requires internet access and either a Game Pass plan with cloud gaming, or a GeForce NOW membership and access to the games you want to play. Choose a service and follow the on-screen sign-in instructions.",
+    "inst_md": "Requires internet access and either a Game Pass plan with cloud gaming, or a GeForce NOW membership and access to the games you want to play. Choose a service and follow the on-screen sign-in instructions.",
     "genres": [
       "other"
     ],

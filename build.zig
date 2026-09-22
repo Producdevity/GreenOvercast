@@ -11,7 +11,6 @@ const aarch64_linux_query: std.Target.Query = .{
 const c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
 
 const project_include_paths = [_][]const u8{
-    ".tools/deps/aarch64-linux-gnu/include",
     "vendor/libdatachannel/include",
     "src/media/audio",
     "src/media/video",
@@ -51,6 +50,7 @@ const release_zig_roots = [_]struct {
         .imports = &.{
             .{ .name = "json_reader", .path = "src/net/json_reader.zig" },
             .{ .name = "json_writer", .path = "src/net/json_writer.zig" },
+            .{ .name = "uuid", .path = "src/util/uuid.zig" },
         },
     },
     .{ .name = "greenovercast-controller", .path = "src/input/controller.zig" },
@@ -81,6 +81,7 @@ const release_c_sources = [_][]const u8{
     "src/media/video/video_decoder_v4l2_request.c",
     "src/auth/token_store_adapter.c",
     "src/net/http_client.c",
+    "src/net/websocket_client.c",
     "src/ui/artwork_decoder.c",
 };
 
@@ -122,6 +123,7 @@ fn addReleaseZigObject(
         .link_libc = true,
     });
     addProjectIncludes(b, module);
+    module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
     for (imports) |item|
         addZigImport(b, module, target, optimize, item.name, item.path);
     return b.addObject(.{ .name = name, .root_module = module });
@@ -146,6 +148,28 @@ fn addStaticArchive(module: *std.Build.Module, b: *std.Build, path: []const u8) 
     module.addObjectFile(b.path(path));
 }
 
+fn addHostUnitTest(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    source: []const u8,
+    project_includes: bool,
+    sdl: bool,
+    imports: []const ZigImport,
+) void {
+    const module = b.createModule(.{
+        .root_source_file = b.path(source),
+        .target = b.graph.host,
+        .optimize = .Debug,
+        .link_libc = project_includes,
+    });
+    if (project_includes) addProjectIncludes(b, module);
+    if (sdl) module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .force });
+    for (imports) |item|
+        addZigImport(b, module, b.graph.host, .Debug, item.name, item.path);
+    const unit_tests = b.addTest(.{ .root_module = module });
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+}
+
 fn addReleaseArtifacts(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -166,6 +190,31 @@ fn addReleaseArtifacts(
         .strip = true,
     });
     addProjectIncludes(b, main_module);
+    main_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    addZigImport(
+        b,
+        main_module,
+        target,
+        optimize,
+        "form_writer",
+        "src/net/form_writer.zig",
+    );
+    addZigImport(
+        b,
+        main_module,
+        target,
+        optimize,
+        "catalog_parser",
+        "src/catalog/catalog_parser.zig",
+    );
+    addZigImport(
+        b,
+        main_module,
+        target,
+        optimize,
+        "uuid",
+        "src/util/uuid.zig",
+    );
     main_module.addLibraryPath(b.path(".tools/deps/aarch64-linux-gnu/lib"));
     main_module.addRPathSpecial("$ORIGIN");
     main_module.addCSourceFiles(.{
@@ -456,32 +505,97 @@ pub fn build(b: *std.Build) void {
     });
     rocknix_build_regression_test.setCwd(b.path("."));
     test_step.dependOn(&rocknix_build_regression_test.step);
+    const dependency_toolchain_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/dependency_toolchain_test.sh"),
+    });
+    dependency_toolchain_test.setCwd(b.path("."));
+    test_step.dependOn(&dependency_toolchain_test.step);
 
-    const test_roots = [_][]const u8{
-        "src/app/state.zig",
-        "src/catalog/catalog_parser.zig",
-        "src/catalog/catalog_search.zig",
-        "src/input/wire_encoder.zig",
-        "src/input/guide_chord.zig",
-        "src/session/message_protocol.zig",
-        "src/ui/keyboard.zig",
-        "src/ui/control_icons.zig",
-        "src/ui/navigation_repeat.zig",
-        "src/ui/persistent_settings.zig",
-        "src/ui/stream_dimensions.zig",
-        "src/media/rtp/h264_depacketizer.zig",
-        "src/net/json_reader.zig",
-        "src/net/json_writer.zig",
-        "src/net/form_writer.zig",
+    const tests = [_]struct {
+        source: []const u8,
+        project_includes: bool = false,
+        sdl: bool = false,
+        imports: []const ZigImport = &.{},
+    }{
+        .{ .source = "src/app/state.zig" },
+        .{ .source = "src/catalog/catalog_parser.zig" },
+        .{ .source = "src/catalog/catalog_search.zig" },
+        .{ .source = "src/input/wire_encoder.zig" },
+        .{ .source = "src/input/guide_chord.zig" },
+        .{ .source = "src/session/message_protocol.zig" },
+        .{ .source = "src/ui/keyboard.zig" },
+        .{ .source = "src/ui/control_icons.zig" },
+        .{ .source = "src/ui/navigation_repeat.zig" },
+        .{ .source = "src/ui/persistent_settings.zig" },
+        .{ .source = "src/ui/stream_dimensions.zig" },
+        .{ .source = "src/media/rtp/h264_depacketizer.zig" },
+        .{ .source = "src/net/json_reader.zig" },
+        .{ .source = "src/net/json_writer.zig" },
+        .{ .source = "src/net/form_writer.zig" },
+        .{ .source = "src/util/uuid.zig" },
+        .{ .source = "src/provider/geforce_now/input_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/pointer_input.zig" },
+        .{ .source = "src/provider/geforce_now/endpoint.zig" },
+        .{ .source = "src/provider/geforce_now/cloudmatch_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/subscription_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/provider_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/signaling_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/sdp_protocol.zig" },
+        .{
+            .source = "src/provider/geforce_now/auth_protocol.zig",
+            .imports = &.{.{ .name = "form_writer", .path = "src/net/form_writer.zig" }},
+        },
+        .{
+            .source = "src/provider/geforce_now/auth_client.zig",
+            .project_includes = true,
+            .sdl = true,
+            .imports = &.{
+                .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
+                .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
+                .{ .name = "uuid", .path = "src/util/uuid.zig" },
+            },
+        },
+        .{
+            .source = "src/provider/geforce_now/catalog_protocol.zig",
+            .imports = &.{.{ .name = "catalog_parser", .path = "src/catalog/catalog_parser.zig" }},
+        },
+        .{
+            .source = "src/provider/geforce_now/catalog_service.zig",
+            .project_includes = true,
+            .sdl = true,
+            .imports = &.{
+                .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
+                .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
+                .{ .name = "catalog_parser", .path = "src/catalog/catalog_parser.zig" },
+                .{ .name = "uuid", .path = "src/util/uuid.zig" },
+            },
+        },
+        .{
+            .source = "src/provider/geforce_now/session_client.zig",
+            .project_includes = true,
+            .sdl = true,
+            .imports = &.{
+                .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
+                .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
+                .{ .name = "uuid", .path = "src/util/uuid.zig" },
+            },
+        },
+        .{
+            .source = "src/provider/geforce_now/webrtc_session.zig",
+            .project_includes = true,
+            .sdl = true,
+        },
     };
-    for (test_roots) |root| {
-        const unit_tests = b.addTest(.{
-            .root_source_file = b.path(root),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        });
-        test_step.dependOn(&b.addRunArtifact(unit_tests).step);
-    }
+    for (tests) |test_config|
+        addHostUnitTest(
+            b,
+            test_step,
+            test_config.source,
+            test_config.project_includes,
+            test_config.sdl,
+            test_config.imports,
+        );
 
     const video_decoder_object =
         addHostZigObject(b, "video-decoder", "src/media/video/video_decoder.zig");
@@ -536,6 +650,20 @@ pub fn build(b: *std.Build) void {
 
     const fake_cedar_valid =
         addHostCFakeLibrary(b, "fake-cedar-valid", "tests/cedar_fake_valid.c");
+    const cedar_list_test = b.addExecutable(.{
+        .name = "cedar-list-test",
+        .root_source_file = null,
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    cedar_list_test.addIncludePath(b.path("vendor/cedarx/base/include"));
+    cedar_list_test.addCSourceFile(.{
+        .file = b.path("tests/cedar_list_test.c"),
+        .flags = &.{ "-std=gnu11", "-Wall", "-Wextra", "-Werror" },
+    });
+    cedar_list_test.linkLibC();
+    test_step.dependOn(&b.addRunArtifact(cedar_list_test).step);
+
     const cedar_decoder_test = addHostCExecutable(
         b,
         "video-decoder-cedar-test",

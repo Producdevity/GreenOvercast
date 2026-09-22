@@ -2,13 +2,16 @@
 
 <img width="640" height="480" alt="GreenOvercast game library" src="packaging/portmaster/greenovercast/screenshot.png" />
 
-GreenOvercast is a native Xbox Cloud Gaming client for small ARM64 Linux
-handhelds. It requests a stream matching the device display and uses hardware
-video decoding on supported H700 and Rockchip firmware.
+GreenOvercast is a native Xbox Cloud Gaming and GeForce NOW client for small
+ARM64 Linux handhelds, with hardware video decoding on supported H700 and
+Rockchip firmware.
 
-This independent project is not affiliated with or endorsed by Microsoft.
+This independent project is not affiliated with Microsoft or NVIDIA.
 
-Requires an [Xbox Game Pass plan](https://www.xbox.com/cloud-gaming) that includes cloud gaming and internet access.
+You need internet access and an account for your chosen service:
+
+- Xbox: an [Xbox Game Pass plan](https://www.xbox.com/cloud-gaming) that includes cloud gaming.
+- [GeForce NOW](https://www.nvidia.com/en-us/geforce-now/): a membership and access to the games you want to play.
 
 ## Install
 
@@ -19,9 +22,9 @@ the [PortMaster FAQ](https://portmaster.games/faq.html#do-i-have-to-use-portmast
 When the installation finishes, return to the device frontend and launch
 GreenOvercast from Ports.
 
-The first launch shows a Microsoft device code. Open
-[microsoft.com/link](https://www.microsoft.com/link) on another device and enter
-the code to sign in.
+Choose Xbox or GeForce NOW, then open the sign-in link shown on screen on
+another device and enter the code. Your login is saved. You can switch services
+from Settings without closing the app.
 
 GreenOvercast is experimental.
 
@@ -44,28 +47,39 @@ GreenOvercast is experimental.
 Settings include Xbox/Nintendo face-button layouts, game artwork, and Sign
 out. Games that return a 16:9 stream remain letterboxed on 4:3 displays.
 
+GeForce NOW uses the same gamepad controls. For store dialogs and game
+launchers, press Select + Y to toggle mouse mode: D-pad or left stick moves the
+pointer, A clicks, B right-clicks, and L1 / R1 scroll. Store sign-in may still be
+required inside the stream.
+
 ## Supported devices
 
-| Device     | OS                              | Status |
-| ---------- | ------------------------------- | ------ |
-| RG35XX-H   | muOS 2508.4                     | Tested |
-| RG40XX-H   | Knulli (Batocera 42)            | Tested |
-| RG40XX-H   | ROCKNIX 20260801                | Tested |
-| Miyoo Flip | SpruceOS 4.2.0                  | Tested |
-| R36S       | AmberELEC prerelease-20250515   | Tested |
+| Device     | SoC             | OS                            | Status |
+| ---------- | --------------- | ----------------------------- | ------ |
+| RG35XX-H   | Allwinner H700  | muOS 2508.4                   | Tested |
+| RG40XX-H   | Allwinner H700  | Knulli (Batocera 42)          | Tested |
+| RG40XX-H   | Allwinner H700  | ROCKNIX 20260801              | Tested |
+| Miyoo Flip | Rockchip RK3566 | SpruceOS 4.3.3                | Tested |
+| R36S       | Rockchip RK3326 | AmberELEC prerelease-20250515 | Tested |
 
-Hardware decoding is verified on the H700 systems above. muOS and Knulli use
-CedarX; ROCKNIX 20260801 uses the bundled Cedrus modules. Tested Rockchip builds
-use Rockchip MPP on RK3566 with SpruceOS and RK3326 with AmberELEC. Other
+Hardware decoding is verified on the configurations above. H700 uses CedarX on
+muOS and Knulli, and Cedrus on ROCKNIX. RK3566 and RK3326 use Rockchip MPP. Other
 devices fall back to software decoding, which is too slow for normal gameplay.
 
-The release requires glibc 2.38 or newer. ArkOS ships glibc 2.30 and is not
-supported.
+GeForce NOW playback has been tested on muOS, Knulli, SpruceOS, and the R36S
+running dArkOS 02012026. R36S frame pacing still needs work. The ROCKNIX and
+AmberELEC rows above currently cover Xbox playback.
+
+The release requires glibc 2.38 or newer. ArkOS (glibc 2.30) is not supported;
+the tested dArkOS fork uses glibc 2.41.
 
 ## Build
 
-You need a Linux or macOS host with `cmake`, `curl`, `git`, `make`, `patch`,
-`perl`, and `python3`.
+You need a Linux or macOS host with CMake 3.24+, `curl`, `git`, `make`, `patch`,
+`perl`, `pkg-config`, `python3`, and `tar`.
+
+Host tests also need SDL2 development files: install
+`libsdl2-dev pkg-config` on Debian/Ubuntu or `sdl2 pkg-config` with Homebrew.
 
 ```sh
 tools/bootstrap.sh

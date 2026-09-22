@@ -20,11 +20,6 @@ const auth_failed: c_int = -1;
 const auth_ok: c_int = 0;
 const auth_reauth_required: c_int = 1;
 
-const FormField = struct {
-    key: []const u8,
-    value: []const u8,
-};
-
 const Auth = struct {
     client_id: [128]u8 = [_]u8{0} ** 128,
     gssv_token: [8192]u8 = [_]u8{0} ** 8192,
@@ -79,23 +74,6 @@ fn loadClientId(auth: *Auth) !void {
         return copyString(&auth.client_id, value);
     }
     try copyString(&auth.client_id, xbox_web_client_id);
-}
-
-fn buildForm(output: []u8, fields: []const FormField) ![:0]u8 {
-    if (output.len == 0) return error.NoSpaceLeft;
-    var used: usize = 0;
-    for (fields, 0..) |field, index| {
-        const prefix = try std.fmt.bufPrint(
-            output[used..],
-            "{s}{s}=",
-            .{ if (index == 0) "" else "&", field.key },
-        );
-        used += prefix.len;
-        used += form.encode(field.value, output[used..]) catch return error.NoSpaceLeft;
-    }
-    if (used >= output.len) return error.NoSpaceLeft;
-    output[used] = 0;
-    return output[0..used :0];
 }
 
 fn responseData(response: [*c]c.GoHttpResponse) ?[]const u8 {
@@ -164,10 +142,10 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
     var headers = [_][*c]const u8{"Content-Type: application/x-www-form-urlencoded"};
     while (true) {
         var body_buffer: [4096]u8 = undefined;
-        const body = try buildForm(&body_buffer, &.{
-            .{ .key = "client_id", .value = cString(&auth.client_id) },
-            .{ .key = "scope", .value = oauth_scope },
-        });
+        const body = try form.build(&.{
+            .{ .name = "client_id", .value = cString(&auth.client_id) },
+            .{ .name = "scope", .value = oauth_scope },
+        }, &body_buffer);
         c.go_handheld_ui_draw_loading(ui, "XBOX SIGN IN", "REQUESTING A DEVICE CODE", c.GO_HANDHELD_UI_ACTION_BACK);
         var response = c.go_http_request(
             "POST",
@@ -189,7 +167,7 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
         const user_code = jsonString(data, "user_code", &user_code_buffer) catch null;
         const device_code = jsonString(data, "device_code", &device_code_buffer) catch null;
         var interval = jsonUnsigned(data, "interval", 5);
-        var expires_in = jsonUnsigned(data, "expires_in", 900);
+        const expires_in = jsonUnsigned(data, "expires_in", 900);
         c.go_http_response_destroy(response);
         if (user_code == null or device_code == null) {
             std.crypto.secureZero(u8, &device_code_buffer);
@@ -198,15 +176,15 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
             continue;
         }
         defer std.crypto.secureZero(u8, &device_code_buffer);
-        interval = std.math.clamp(interval, 1, 30);
-        if (expires_in < interval) expires_in = interval;
+        interval = @max(interval, 1);
 
         const started = c.SDL_GetTicks();
-        var next_poll = started +% interval * 1000;
+        var last_poll = started;
         var restart = false;
-        while ((c.SDL_GetTicks() -% started) / 1000 < expires_in) {
+        while (true) {
             const now = c.SDL_GetTicks();
             const elapsed = (now -% started) / 1000;
+            if (elapsed >= expires_in) break;
             c.go_handheld_ui_draw_device_code(
                 ui,
                 @ptrCast(&user_code_buffer),
@@ -214,17 +192,16 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
                 expires_in - elapsed,
             );
             if (c.go_handheld_ui_sign_in_action(ui) < 0) return false;
-            const until_poll: i32 = @bitCast(now -% next_poll);
-            if (until_poll < 0) {
+            if ((now -% last_poll) / 1000 < interval) {
                 c.SDL_Delay(16);
                 continue;
             }
 
-            const token_body = try buildForm(&body_buffer, &.{
-                .{ .key = "grant_type", .value = "urn:ietf:params:oauth:grant-type:device_code" },
-                .{ .key = "client_id", .value = cString(&auth.client_id) },
-                .{ .key = "device_code", .value = device_code.? },
-            });
+            const token_body = try form.build(&.{
+                .{ .name = "grant_type", .value = "urn:ietf:params:oauth:grant-type:device_code" },
+                .{ .name = "client_id", .value = cString(&auth.client_id) },
+                .{ .name = "device_code", .value = device_code.? },
+            }, &body_buffer);
             response = c.go_http_request(
                 "POST",
                 oauth_token_url,
@@ -232,7 +209,7 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
                 @ptrCast(&headers),
                 headers.len,
             );
-            next_poll = c.SDL_GetTicks() +% interval * 1000;
+            last_poll = c.SDL_GetTicks();
             const token_data = responseData(response) orelse {
                 c.go_http_response_destroy(response);
                 continue;
@@ -259,7 +236,7 @@ fn deviceSignIn(auth: *Auth, ui: *c.GoHandheldUi) !bool {
             const message = jsonString(token_data, "error", &error_buffer) catch null;
             if (message) |value| {
                 if (std.mem.eql(u8, value, "slow_down"))
-                    interval = @min(interval + 5, 30)
+                    interval +|= 5
                 else if (!std.mem.eql(u8, value, "authorization_pending"))
                     restart = true;
             }
@@ -290,12 +267,12 @@ fn refresh(auth: *Auth) !c_int {
         "x-gssv-client: XboxComBrowser",
     };
 
-    const refresh_body = try buildForm(&body_buffer, &.{
-        .{ .key = "client_id", .value = cString(&auth.client_id) },
-        .{ .key = "grant_type", .value = "refresh_token" },
-        .{ .key = "refresh_token", .value = cString(&auth.refresh_token) },
-        .{ .key = "scope", .value = oauth_scope },
-    });
+    const refresh_body = try form.build(&.{
+        .{ .name = "client_id", .value = cString(&auth.client_id) },
+        .{ .name = "grant_type", .value = "refresh_token" },
+        .{ .name = "refresh_token", .value = cString(&auth.refresh_token) },
+        .{ .name = "scope", .value = oauth_scope },
+    }, &body_buffer);
     var response = c.go_http_request(
         "POST",
         oauth_token_url,
@@ -399,12 +376,12 @@ fn refresh(auth: *Auth) !c_int {
     c.go_http_response_destroy(response);
     debug("gsToken obtained\n", .{});
 
-    const passport_body = try buildForm(&body_buffer, &.{
-        .{ .key = "client_id", .value = cString(&auth.client_id) },
-        .{ .key = "grant_type", .value = "refresh_token" },
-        .{ .key = "refresh_token", .value = cString(&auth.refresh_token) },
-        .{ .key = "scope", .value = passport_scope },
-    });
+    const passport_body = try form.build(&.{
+        .{ .name = "client_id", .value = cString(&auth.client_id) },
+        .{ .name = "grant_type", .value = "refresh_token" },
+        .{ .name = "refresh_token", .value = cString(&auth.refresh_token) },
+        .{ .name = "scope", .value = passport_scope },
+    }, &body_buffer);
     response = c.go_http_request(
         "POST",
         "https://login.live.com/oauth20_token.srf",

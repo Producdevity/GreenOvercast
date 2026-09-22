@@ -2,6 +2,7 @@ const std = @import("std");
 const controls = @import("control_icons.zig");
 const navigation = @import("navigation_repeat.zig");
 const font = @import("pixel_font.zig");
+const provider_badge = @import("provider_badge.zig");
 const settings = @import("persistent_settings.zig");
 const style = @import("view_style.zig");
 
@@ -12,6 +13,7 @@ const c = @cImport({
 
 pub const Result = enum {
     back,
+    switch_provider,
     sign_out,
     cancelled,
 };
@@ -21,6 +23,13 @@ const StopRequested = ?*const fn (?*anyopaque) callconv(.c) c_int;
 const Row = enum {
     face_buttons,
     artwork,
+    service,
+    sign_out,
+};
+
+const Action = enum {
+    none,
+    switch_provider,
     sign_out,
 };
 
@@ -28,6 +37,7 @@ pub fn run(
     renderer_pointer: *anyopaque,
     controller_pointer: *anyopaque,
     store: *settings.Store,
+    provider: provider_badge.Provider,
     stop_requested: StopRequested,
     stop_context: ?*anyopaque,
 ) Result {
@@ -46,9 +56,10 @@ pub fn run(
                 c.SDLK_ESCAPE => return .back,
                 c.SDLK_UP => selected = previousRow(selected),
                 c.SDLK_DOWN => selected = nextRow(selected),
-                c.SDLK_RETURN => if (activate(selected, controller, store)) {
-                    const confirmation = confirmSignOut(renderer, controller, store.face_buttons, stop_requested, stop_context);
-                    if (confirmation != .back) return confirmation;
+                c.SDLK_RETURN => {
+                    const action = activate(selected, controller, store);
+                    if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
+                        return result;
                     dirty = true;
                 },
                 else => {},
@@ -60,9 +71,10 @@ pub fn run(
                 const button = c.go_controller_input_map_button(controller, event.cbutton.button);
                 switch (button) {
                     c.SDL_CONTROLLER_BUTTON_B => return .back,
-                    c.SDL_CONTROLLER_BUTTON_A => if (activate(selected, controller, store)) {
-                        const confirmation = confirmSignOut(renderer, controller, store.face_buttons, stop_requested, stop_context);
-                        if (confirmation != .back) return confirmation;
+                    c.SDL_CONTROLLER_BUTTON_A => {
+                        const action = activate(selected, controller, store);
+                        if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
+                            return result;
                         dirty = true;
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_UP => {
@@ -74,7 +86,8 @@ pub fn run(
                         repeat.begin(.down, c.SDL_GetTicks());
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_LEFT, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT => {
-                        if (selected != .sign_out) _ = activate(selected, controller, store);
+                        if (selected == .face_buttons or selected == .artwork)
+                            _ = activate(selected, controller, store);
                     },
                     else => {},
                 }
@@ -96,7 +109,7 @@ pub fn run(
             }
         }
         if (dirty) {
-            draw(renderer, store, selected);
+            draw(renderer, store, provider, selected);
             dirty = false;
         }
         c.SDL_Delay(16);
@@ -107,7 +120,7 @@ fn activate(
     row: Row,
     controller: *c.GoControllerInput,
     store: *settings.Store,
-) bool {
+) Action {
     switch (row) {
         .face_buttons => {
             store.face_buttons = if (store.face_buttons == .system) .swapped else .system;
@@ -117,24 +130,51 @@ fn activate(
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
-        .sign_out => return true,
+        .service => return .switch_provider,
+        .sign_out => return .sign_out,
     }
     store.save() catch std.debug.print("Settings could not be saved\n", .{});
-    return false;
+    return .none;
+}
+
+fn resolveAction(
+    action: Action,
+    renderer: *c.SDL_Renderer,
+    controller: *c.GoControllerInput,
+    face_buttons: settings.FaceButtonMode,
+    stop_requested: StopRequested,
+    stop_context: ?*anyopaque,
+) ?Result {
+    return switch (action) {
+        .none => null,
+        .switch_provider => .switch_provider,
+        .sign_out => result: {
+            const confirmation = confirmSignOut(
+                renderer,
+                controller,
+                face_buttons,
+                stop_requested,
+                stop_context,
+            );
+            break :result if (confirmation == .back) null else confirmation;
+        },
+    };
 }
 
 fn previousRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .sign_out,
         .artwork => .face_buttons,
-        .sign_out => .artwork,
+        .service => .artwork,
+        .sign_out => .service,
     };
 }
 
 fn nextRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .artwork,
-        .artwork => .sign_out,
+        .artwork => .service,
+        .service => .sign_out,
         .sign_out => .face_buttons,
     };
 }
@@ -152,6 +192,7 @@ fn heldDirection(controller: *c.GoControllerInput, latch: *navigation.AxisLatch)
 fn draw(
     renderer: *c.SDL_Renderer,
     store: *const settings.Store,
+    provider: provider_badge.Provider,
     selected: Row,
 ) void {
     style.setColor(renderer, style.background());
@@ -163,9 +204,10 @@ fn draw(
     _ = c.SDL_RenderFillRect(renderer, &footer);
     font.text(renderer, 18, 14, 4, "SETTINGS", style.bright());
 
-    drawRow(renderer, 92, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
-    drawRow(renderer, 148, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
-    drawRow(renderer, 204, "ACCOUNT", "SIGN OUT", selected == .sign_out);
+    drawRow(renderer, 82, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
+    drawRow(renderer, 130, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
+    drawRow(renderer, 178, "STREAMING SERVICE", if (provider == .xbox) "XBOX" else "GEFORCE NOW", selected == .service);
+    drawRow(renderer, 226, "ACCOUNT", "SIGN OUT", selected == .sign_out);
 
     drawMappingExplanation(renderer, store.face_buttons);
     font.text(renderer, 18, 340, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
@@ -222,7 +264,7 @@ fn confirmSignOut(
     style.setColor(renderer, style.background());
     _ = c.SDL_RenderClear(renderer);
     font.text(renderer, 164, 174, 4, "SIGN OUT?", style.bright());
-    font.text(renderer, 110, 242, 2, "YOU WILL NEED TO LINK XBOX AGAIN", style.muted());
+    font.text(renderer, 128, 242, 2, "YOU WILL NEED TO SIGN IN AGAIN", style.muted());
     const prompts = [_]controls.Prompt{
         controls.Prompt.one(controls.face(face_buttons, .a), "YES"),
         controls.Prompt.one(controls.face(face_buttons, .b), "NO"),
