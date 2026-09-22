@@ -11,7 +11,6 @@ const aarch64_linux_query: std.Target.Query = .{
 const c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
 
 const project_include_paths = [_][]const u8{
-    ".tools/deps/aarch64-linux-gnu/include",
     "vendor/libdatachannel/include",
     "src/media/audio",
     "src/media/video",
@@ -123,6 +122,7 @@ fn addReleaseZigObject(
         .link_libc = true,
     });
     addProjectIncludes(b, module);
+    module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
     for (imports) |item|
         addZigImport(b, module, target, optimize, item.name, item.path);
     return b.addObject(.{ .name = name, .root_module = module });
@@ -152,6 +152,7 @@ fn addHostUnitTest(
     test_step: *std.Build.Step,
     source: []const u8,
     project_includes: bool,
+    sdl: bool,
     imports: []const ZigImport,
 ) void {
     const module = b.createModule(.{
@@ -161,6 +162,7 @@ fn addHostUnitTest(
         .link_libc = project_includes,
     });
     if (project_includes) addProjectIncludes(b, module);
+    if (sdl) module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .force });
     for (imports) |item|
         addZigImport(b, module, b.graph.host, .Debug, item.name, item.path);
     const unit_tests = b.addTest(.{ .root_module = module });
@@ -187,6 +189,7 @@ fn addReleaseArtifacts(
         .strip = true,
     });
     addProjectIncludes(b, main_module);
+    main_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
     addZigImport(
         b,
         main_module,
@@ -505,6 +508,7 @@ pub fn build(b: *std.Build) void {
     const tests = [_]struct {
         source: []const u8,
         project_includes: bool = false,
+        sdl: bool = false,
         imports: []const ZigImport = &.{},
     }{
         .{ .source = "src/app/state.zig" },
@@ -538,6 +542,7 @@ pub fn build(b: *std.Build) void {
         .{
             .source = "src/provider/geforce_now/auth_client.zig",
             .project_includes = true,
+            .sdl = true,
             .imports = &.{
                 .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
                 .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
@@ -551,6 +556,7 @@ pub fn build(b: *std.Build) void {
         .{
             .source = "src/provider/geforce_now/catalog_service.zig",
             .project_includes = true,
+            .sdl = true,
             .imports = &.{
                 .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
                 .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
@@ -561,6 +567,7 @@ pub fn build(b: *std.Build) void {
         .{
             .source = "src/provider/geforce_now/session_client.zig",
             .project_includes = true,
+            .sdl = true,
             .imports = &.{
                 .{ .name = "gfn_http_fake", .path = "tests/gfn_http_fake.zig" },
                 .{ .name = "form_writer", .path = "src/net/form_writer.zig" },
@@ -570,6 +577,7 @@ pub fn build(b: *std.Build) void {
         .{
             .source = "src/provider/geforce_now/webrtc_session.zig",
             .project_includes = true,
+            .sdl = true,
         },
     };
     for (tests) |test_config|
@@ -578,6 +586,7 @@ pub fn build(b: *std.Build) void {
             test_step,
             test_config.source,
             test_config.project_includes,
+            test_config.sdl,
             test_config.imports,
         );
 

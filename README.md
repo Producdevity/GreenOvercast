@@ -78,6 +78,9 @@ supported.
 You need a Linux or macOS host with `cmake`, `curl`, `git`, `make`, `patch`,
 `perl`, and `python3`.
 
+Host tests also need SDL2 development files and `pkg-config`: install
+`libsdl2-dev pkg-config` on Debian/Ubuntu or `sdl2 pkg-config` with Homebrew.
+
 ```sh
 tools/bootstrap.sh
 tools/zig.sh build
