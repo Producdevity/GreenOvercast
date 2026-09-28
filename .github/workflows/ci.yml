@@ -1,37 +1,452 @@
-name: Offline verification inputs
+name: Verify GFN outline-atomics fix
 on: [push]
 permissions:
   contents: read
 jobs:
-  inputs:
+  verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: 455f4b580abb7ae523f392ec21763b3c88bf2ddd
           persist-credentials: false
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev pkg-config binutils
       - run: tools/bootstrap.sh
-      - name: Fetch pinned dependency archives without compiling
+      - name: Write regression fixtures
+        run: |
+          mkdir -p .agents/results
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('tools/check-aarch64-runtime.sh').write_text(r'''#!/bin/sh
+          set -eu
+          export LC_ALL=C
+          if [ "$#" -eq 0 ]; then
+            echo "usage: $0 ELF_FILE..." >&2
+            exit 1
+          fi
+          reader=${READELF:-}
+          if [ -z "$reader" ]; then
+            for candidate in llvm-readelf readelf greadelf; do
+              if command -v "$candidate" >/dev/null 2>&1; then
+                reader=$candidate
+                break
+              fi
+            done
+          fi
+          [ -n "$reader" ] || { echo "missing llvm-readelf or GNU readelf; install LLVM or binutils" >&2; exit 1; }
+          status=0
+          for artifact do
+            if ! symbols=$("$reader" -h -W --dyn-syms -- "$artifact" 2>&1); then
+              printf '%s\n' "$symbols" >&2
+              status=1
+              continue
+            fi
+            if ! printf '%s\n' "$symbols" | grep -Eq 'Machine:[[:space:]]+AArch64[[:space:]]*$'; then
+              printf '%s: not an AArch64 ELF artifact\n' "$artifact" >&2
+              status=1
+              continue
+            fi
+            if ! printf '%s\n' "$symbols" | grep -Eq 'Type:[[:space:]]+(DYN|EXEC)[[:space:]]'; then
+              printf '%s: not a linked executable or shared library\n' "$artifact" >&2
+              status=1
+              continue
+            fi
+            missing=$(printf '%s\n' "$symbols" | awk '$7 == "UND" && $8 ~ /^__aarch64_/ { print $8 }' | sort -u)
+            if [ -n "$missing" ]; then
+              printf '%s: unresolved AArch64 runtime helpers:\n%s\n' "$artifact" "$missing" >&2
+              status=1
+            fi
+          done
+          exit "$status"
+          ''')
+          Path('tests/aarch64_runtime_test.sh').write_text(r'''#!/bin/sh
+          set -eu
+          ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+          ZIG="$ROOT/.tools/zig-0.14.1/zig"
+          CHECK="$ROOT/tools/check-aarch64-runtime.sh"
+          TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/greenovercast-atomics-test.XXXXXX")
+          trap 'rm -rf "$TEST_ROOT"' EXIT HUP INT TERM
+          reject() {
+            expected=$1
+            shift
+            if "$@" >"$TEST_ROOT/rejected.log" 2>&1; then
+              echo "unexpected success: $*" >&2
+              exit 1
+            fi
+            if ! grep -F "$expected" "$TEST_ROOT/rejected.log" >/dev/null; then
+              cat "$TEST_ROOT/rejected.log" >&2
+              echo "missing diagnostic: $expected" >&2
+              exit 1
+            fi
+          }
+          shared() {
+            "$ZIG" build-lib -target "${3:-aarch64-linux-gnu.2.38}" -dynamic \
+              -fno-compiler-rt -fallow-shlib-undefined "$1" -femit-bin="$2"
+          }
+          fixture="$TEST_ROOT/project"
+          mkdir -p "$fixture/tools" "$fixture/.tools/zig-0.14.1"
+          cp "$ROOT/tools/build-dependencies.sh" "$fixture/tools/"
+          ln -s "$ZIG" "$fixture/.tools/zig-0.14.1/zig"
+          sh "$fixture/tools/build-dependencies.sh" --toolchain-only
+          cat >"$TEST_ROOT/atomic.c" <<'C'
+          unsigned long long atomic_add(unsigned long long *value) {
+              return __atomic_fetch_add(value, 1ULL, __ATOMIC_ACQ_REL);
+          }
+          C
+          "$ZIG" cc -target aarch64-linux-gnu.2.38 -mcpu=baseline \
+            -O2 -fPIC -moutline-atomics -c "$TEST_ROOT/atomic.c" -o "$TEST_ROOT/outlined.o"
+          shared "$TEST_ROOT/outlined.o" "$TEST_ROOT/outlined.so"
+          reject '__aarch64_ldadd8_acq_rel' sh "$CHECK" "$TEST_ROOT/outlined.so"
+          echo 'PASS: outlined ARM64 C artifact rejected with the reported symbol'
+          for driver in cc c++; do
+            language=c
+            [ "$driver" != "c++" ] || language=c++
+            "$fixture/.tools/cross/aarch64-linux-gnu/$driver" -O2 -fPIC \
+              -moutline-atomics -x "$language" -c "$TEST_ROOT/atomic.c" -o "$TEST_ROOT/inline.o"
+            shared "$TEST_ROOT/inline.o" "$TEST_ROOT/inline.so"
+            sh "$CHECK" "$TEST_ROOT/inline.so"
+            echo "PASS: $driver wrapper prevents caller flags from re-enabling outline atomics"
+          done
+          cat >"$TEST_ROOT/atomic.zig" <<'ZIG'
+          export fn atomic_add(value: *u64) u64 {
+              return @atomicRmw(u64, value, .Add, 1, .acq_rel);
+          }
+          ZIG
+          for policy in +outline_atomics -outline_atomics; do
+            "$ZIG" build-obj -target aarch64-linux-gnu.2.38 -mcpu="baseline$policy" \
+              -O ReleaseSafe -fPIC "$TEST_ROOT/atomic.zig" -femit-bin="$TEST_ROOT/zig.o"
+            shared "$TEST_ROOT/zig.o" "$TEST_ROOT/zig.so"
+            case "$policy" in
+              +*) reject '__aarch64_ldadd8_acq_rel' sh "$CHECK" "$TEST_ROOT/zig.so" ;;
+              -*) sh "$CHECK" "$TEST_ROOT/zig.so" ;;
+            esac
+          done
+          echo 'PASS: Zig target feature reproduces and removes the same ARM64 helper import'
+          cat >"$TEST_ROOT/defined.c" <<'C'
+          unsigned long long __aarch64_ldadd8_acq_rel(unsigned long long add, unsigned long long *value) {
+              return __atomic_fetch_add(value, add, __ATOMIC_ACQ_REL);
+          }
+          C
+          "$fixture/.tools/cross/aarch64-linux-gnu/cc" -O2 -fPIC \
+            -c "$TEST_ROOT/defined.c" -o "$TEST_ROOT/defined.o"
+          shared "$TEST_ROOT/defined.o" "$TEST_ROOT/defined.so"
+          sh "$CHECK" "$TEST_ROOT/defined.so"
+          echo 'PASS: a defined helper is not mistaken for an unresolved import'
+          reject '__aarch64_ldadd8_acq_rel' sh "$CHECK" "$TEST_ROOT/inline.so" "$TEST_ROOT/outlined.so"
+          reject 'not a linked executable' sh "$CHECK" "$TEST_ROOT/outlined.o"
+          "$ZIG" cc -target x86_64-linux-gnu.2.38 -O2 -fPIC \
+            -c "$TEST_ROOT/atomic.c" -o "$TEST_ROOT/foreign.o"
+          shared "$TEST_ROOT/foreign.o" "$TEST_ROOT/foreign.so" x86_64-linux-gnu.2.38
+          reject 'not an AArch64 ELF' sh "$CHECK" "$TEST_ROOT/foreign.so"
+          reject 'usage:' sh "$CHECK"
+          reject 'missing.so' sh "$CHECK" "$TEST_ROOT/missing.so"
+          printf 'not an ELF\n' >"$TEST_ROOT/not-elf"
+          reject 'not-elf' sh "$CHECK" "$TEST_ROOT/not-elf"
+          if READELF=false sh "$CHECK" "$TEST_ROOT/inline.so" >/dev/null 2>&1; then
+            echo 'reader failure was accepted' >&2
+            exit 1
+          fi
+          echo 'PASS: sidecar imports, wrong architecture/type, invalid files and reader failures are rejected'
+          # Exercise the standalone package entry point, without invoking PortMaster.
+          cp "$ROOT/tools/package-portmaster.sh" "$CHECK" "$fixture/tools/"
+          mkdir -p "$fixture/zig-out/bin" "$fixture/zig-out/lib" "$fixture/zig-out/rockchip"
+          for path in bin/webrtc_stream lib/libgreenovercast-cedar.so \
+            rockchip/libgreenovercast-mpp.so rockchip/librockchip_mpp.so.1 \
+            rockchip/greenovercast-mpp-probe.aarch64 bin/libavcodec.so.63 \
+            bin/libavutil.so.61 bin/libswscale.so.10; do
+            cp "$TEST_ROOT/inline.so" "$fixture/zig-out/$path"
+          done
+          chmod +x "$fixture/zig-out/bin/webrtc_stream"
+          PORTMASTER_NEW= reject 'set PORTMASTER_NEW' sh "$fixture/tools/package-portmaster.sh"
+          cp "$TEST_ROOT/outlined.so" "$fixture/zig-out/bin/webrtc_stream"
+          PORTMASTER_NEW= reject '__aarch64_ldadd8_acq_rel' sh "$fixture/tools/package-portmaster.sh"
+          cp "$TEST_ROOT/inline.so" "$fixture/zig-out/bin/webrtc_stream"
+          cp "$TEST_ROOT/outlined.so" "$fixture/zig-out/bin/libavcodec.so.63"
+          PORTMASTER_NEW= reject '__aarch64_ldadd8_acq_rel' sh "$fixture/tools/package-portmaster.sh"
+          echo 'PASS: standalone packaging rejects both a broken executable and a broken bundled library'
+          ''')
+          with Path('tests/dependency_toolchain_test.sh').open('a') as output:
+              output.write(r'''
+          # Stop before downloads, but exercise the real cache invalidation path.
+          mock_bin="$TEST_ROOT/mock-bin"
+          mkdir -p "$mock_bin" "$fixture/vendor/libdatachannel" "$fixture/vendor/mpp"
+          : >"$fixture/vendor/libdatachannel/CMakeLists.txt"
+          : >"$fixture/vendor/mpp/CMakeLists.txt"
+          cat >"$mock_bin/git" <<'EOF_GIT'
+          #!/bin/sh
+          case "$2" in
+            */libdatachannel) echo c6696d157b5612df2a741d9a03b192b47ab6cefb ;;
+            */mpp) echo c08762ebfadeb4e986d2fed993bc7a54862d3ebe ;;
+            *) exit 1 ;;
+          esac
+          EOF_GIT
+          cat >"$mock_bin/curl" <<'EOF_CURL'
+          #!/bin/sh
+          echo 'fixture: downloads intentionally disabled' >&2
+          exit 1
+          EOF_CURL
+          chmod +x "$mock_bin/git" "$mock_bin/curl"
+          run_until_download() {
+            if PATH="$mock_bin:$PATH" sh "$fixture/tools/build-dependencies.sh" \
+              >"$TEST_ROOT/cache.log" 2>&1; then
+              echo 'dependency fixture unexpectedly succeeded' >&2
+              exit 1
+            fi
+            if ! grep -F 'fixture: downloads intentionally disabled' "$TEST_ROOT/cache.log" >/dev/null; then
+              cat "$TEST_ROOT/cache.log" >&2
+              exit 1
+            fi
+          }
+          for directory in "$prefix" \
+            "$fixture/.tools/build/dependencies-aarch64" \
+            "$fixture/.tools/build/libdatachannel-aarch64-release" \
+            "$fixture/.tools/build/mpp-aarch64-release"; do
+            mkdir -p "$directory"
+            : >"$directory/stale-output"
+          done
+          run_until_download
+          for directory in "$prefix" \
+            "$fixture/.tools/build/dependencies-aarch64" \
+            "$fixture/.tools/build/libdatachannel-aarch64-release" \
+            "$fixture/.tools/build/mpp-aarch64-release"; do
+            [ ! -e "$directory/stale-output" ] || {
+              echo "stale dependency survived: $directory" >&2
+              exit 1
+            }
+          done
+          : >"$prefix/fresh-output"
+          run_until_download
+          [ -f "$prefix/fresh-output" ] || {
+            echo 'unchanged toolchain unnecessarily discarded the cache' >&2
+            exit 1
+          }
+          printf 'old toolchain\n' >"$fixture/.tools/build/dependencies-aarch64/.toolchain-signature"
+          sh "$fixture/tools/build-dependencies.sh" --toolchain-only
+          [ -f "$prefix/fresh-output" ] || {
+            echo '--toolchain-only discarded dependency outputs' >&2
+            exit 1
+          }
+          run_until_download
+          [ ! -e "$prefix/fresh-output" ] || {
+            echo 'changed toolchain reused stale installed libraries' >&2
+            exit 1
+          }
+          echo 'Dependency cache invalidation and unchanged-toolchain reuse passed'
+          ''')
+          for name in ('tools/check-aarch64-runtime.sh', 'tests/aarch64_runtime_test.sh'):
+              Path(name).chmod(0o755)
+          PY
+      - name: Prove regression tests fail before the fix
+        id: baseline
+        continue-on-error: true
+        run: |
+          set +e
+          sh tests/aarch64_runtime_test.sh > .agents/results/before-atomics.log 2>&1
+          atomic_status=$?
+          sh tests/dependency_toolchain_test.sh > .agents/results/before-cache.log 2>&1
+          cache_status=$?
+          set -e
+          cat .agents/results/before-atomics.log .agents/results/before-cache.log
+          test "$atomic_status" -ne 0
+          grep -F 'PASS: outlined ARM64 C artifact rejected with the reported symbol' .agents/results/before-atomics.log
+          grep -F 'unresolved AArch64 runtime helpers' .agents/results/before-atomics.log
+          test "$cache_status" -ne 0
+          grep -F 'stale dependency survived' .agents/results/before-cache.log
+          printf 'Expected failures confirmed: atomics=%s cache=%s\n' "$atomic_status" "$cache_status" | tee .agents/results/before-summary.txt
+      - name: Apply production fix
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          source = Path('tools/build-dependencies.sh').read_text()
-          before, marker, after = source.partition('export ZIG_GLOBAL_CACHE_DIR=')
-          assert marker
-          Path('tools/.prefetch-inputs.sh').write_text(before + '\nexit 0\n')
+          def replace(name, old, new):
+              path = Path(name)
+              text = path.read_text()
+              assert text.count(old) == 1, (name, text.count(old))
+              path.write_text(text.replace(old, new, 1))
+          replace('build.zig', '    .cpu_arch = .aarch64,\n',
+                  '    .cpu_arch = .aarch64,\n'
+                  '    // Keep baseline ARM64 atomics independent of firmware runtime helpers.\n'
+                  '    .cpu_features_sub = std.Target.aarch64.featureSet(&.{.outline_atomics}),\n')
+          replace('tools/build-dependencies.sh',
+                  '-ffile-prefix-map="%s"=. "$@"\\n',
+                  '-ffile-prefix-map="%s"=. "$@" -mno-outline-atomics\\n')
+          replace('tools/build-dependencies.sh', 'hash_file() {\n', r'''# Compiler flags are not part of the per-library completion stamps. Invalidate
+          # both build trees and installed libraries when the generated toolchain changes.
+          toolchain_signature=$(cksum "$CC_WRAPPER" "$CXX_WRAPPER" "$TOOLCHAIN")
+          cached_signature=
+          if [ -f "$BUILDS/.toolchain-signature" ]; then
+            cached_signature=$(cat "$BUILDS/.toolchain-signature")
+          fi
+          if [ "$cached_signature" != "$toolchain_signature" ]; then
+            rm -rf "$BUILDS" "$LIBDATACHANNEL_BUILD" "$MPP_BUILD" "$PREFIX"
+            mkdir -p "$BUILDS" "$PREFIX"
+            printf '%s\n' "$toolchain_signature" >"$BUILDS/.toolchain-signature"
+          fi
+          
+          hash_file() {
+          ''')
+          replace('tools/package-portmaster.sh', '[ -n "$PORTMASTER_NEW" ] || {\n', r'''sh "$ROOT/tools/check-aarch64-runtime.sh" \
+            "$BINARY" "$CEDAR" "$MPP_PLUGIN" "$MPP_RUNTIME" "$MPP_PROBE" \
+            "$AVCODEC" "$AVUTIL" "$SWSCALE"
+          
+          [ -n "$PORTMASTER_NEW" ] || {
+          ''')
+          replace('build.zig', '''    const release = b.step("release", "Build the aarch64 application and decoder plugins");
+              release.dependOn(&install_executable.step);
+              release.dependOn(&install_cedar.step);
+              release.dependOn(&install_cedar_test.step);
+              release.dependOn(&install_mpp.step);
+              release.dependOn(&install_mpp_runtime.step);
+              for (mpp_device_installs) |install| release.dependOn(&install.step);
+              for (private_library_installs) |install| release.dependOn(&install.step);
+              return release;
+          ''', '''    const runtime_check = b.addSystemCommand(&.{
+                  "sh",
+                  b.pathFromRoot("tools/check-aarch64-runtime.sh"),
+                  b.getInstallPath(.bin, "webrtc_stream"),
+                  b.getInstallPath(.lib, "libgreenovercast-cedar.so"),
+                  b.getInstallPath(.bin, "cedar_bridge_test"),
+                  b.getInstallPath(.prefix, "rockchip/libgreenovercast-mpp.so"),
+                  b.getInstallPath(.prefix, "rockchip/librockchip_mpp.so.1"),
+                  b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-probe.aarch64"),
+                  b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-bridge-test.aarch64"),
+                  b.getInstallPath(.bin, "libavcodec.so.63"),
+                  b.getInstallPath(.bin, "libavutil.so.61"),
+                  b.getInstallPath(.bin, "libswscale.so.10"),
+              });
+              runtime_check.setCwd(b.path("."));
+              runtime_check.step.dependOn(&install_executable.step);
+              runtime_check.step.dependOn(&install_cedar.step);
+              runtime_check.step.dependOn(&install_cedar_test.step);
+              runtime_check.step.dependOn(&install_mpp.step);
+              runtime_check.step.dependOn(&install_mpp_runtime.step);
+              for (mpp_device_installs) |install| runtime_check.step.dependOn(&install.step);
+              for (private_library_installs) |install| runtime_check.step.dependOn(&install.step);
+          
+              const release = b.step("release", "Build the aarch64 application and decoder plugins");
+              release.dependOn(&runtime_check.step);
+              return release;
+          ''')
+          replace('build.zig', '    test_step.dependOn(&dependency_toolchain_test.step);\n', '''    test_step.dependOn(&dependency_toolchain_test.step);
+              const aarch64_runtime_test = b.addSystemCommand(&.{
+                  "sh",
+                  b.pathFromRoot("tests/aarch64_runtime_test.sh"),
+              });
+              aarch64_runtime_test.setCwd(b.path("."));
+              test_step.dependOn(&aarch64_runtime_test.step);
+          ''')
+          replace('README.md', 'Host tests also need SDL2 development files: install\n', '''Release validation also needs `llvm-readelf` or GNU `readelf` (`binutils` on
+          Debian/Ubuntu, or `llvm` with its `bin` directory on `PATH` on macOS).
+          
+          Host tests also need SDL2 development files: install
+          ''')
           PY
-          sh tools/.prefetch-inputs.sh
-          rm tools/.prefetch-inputs.sh
-      - name: Export offline inputs
+          git add -N tools/check-aarch64-runtime.sh tests/aarch64_runtime_test.sh
+          git diff --check
+          git diff HEAD > .agents/results/greenovercast-atomics-fix.patch
+          { uname -a; tools/zig.sh version; git rev-parse HEAD; } > .agents/results/environment.txt
+      - name: Focused regression tests
+        id: focused
+        continue-on-error: true
         run: |
-          tar --exclude='./.tools/build' --exclude='./.tools/cache' \
-            --exclude='./.tools/deps' --exclude='./.tools/sources' \
-            --exclude='./.zig-cache' \
-            -czf "$RUNNER_TEMP/greenovercast-offline-inputs.tar.gz" .
+          { sh tests/aarch64_runtime_test.sh; sh tests/dependency_toolchain_test.sh; } 2>&1 | tee .agents/results/focused-tests.log
+      - name: Format check
+        id: format
+        continue-on-error: true
+        run: tools/zig.sh build fmt-check --summary all 2>&1 | tee .agents/results/fmt-check.log
+      - name: Host tests
+        id: host
+        continue-on-error: true
+        run: tools/zig.sh build test -j2 --summary all 2>&1 | tee .agents/results/host-tests.log
+      - name: ABI smoke build
+        id: smoke
+        continue-on-error: true
+        run: tools/zig.sh build smoke -j2 --summary all 2>&1 | tee .agents/results/smoke-build.log
+      - name: Complete ARM64 application build
+        id: product
+        continue-on-error: true
+        run: tools/zig.sh build product-check -j2 --summary all 2>&1 | tee .agents/results/product-build.log
+      - name: Inspect compiled artifacts
+        id: inspect
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, re, subprocess, tarfile
+          names = ['bin/webrtc_stream', 'lib/libgreenovercast-cedar.so', 'bin/cedar_bridge_test', 'rockchip/libgreenovercast-mpp.so', 'rockchip/librockchip_mpp.so.1', 'rockchip/greenovercast-mpp-probe.aarch64', 'rockchip/greenovercast-mpp-bridge-test.aarch64', 'bin/libavcodec.so.63', 'bin/libavutil.so.61', 'bin/libswscale.so.10']
+          results = []
+          for name in names:
+              path = Path('zig-out') / name
+              subprocess.run(['sh', 'tools/check-aarch64-runtime.sh', str(path)], check=True)
+              symbols = subprocess.check_output(['readelf', '-W', '--dyn-syms', str(path)], text=True)
+              header = subprocess.check_output(['readelf', '-h', str(path)], text=True)
+              imported = [line for line in symbols.splitlines() if ' UND ' in line and '__aarch64_' in line]
+              glibc = sorted(set(re.findall(r'GLIBC_[0-9.]+', symbols)), key=lambda x: tuple(map(int, x[6:].split('.'))))
+              result = {'file': name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'unresolved_aarch64_helpers': imported, 'glibc_versions': glibc}
+              print(json.dumps(result))
+              results.append(result)
+              Path('.agents/results/' + path.name + '.elf.txt').write_text(header + symbols)
+          Path('.agents/results/elf-results.json').write_text(json.dumps(results, indent=2))
+          runtime = [name for name in names if name not in ('bin/cedar_bridge_test', 'rockchip/greenovercast-mpp-bridge-test.aarch64')]
+          with tarfile.open('.agents/results/greenovercast-fixed-runtime.tar.gz', 'w:gz') as tar:
+              for name in runtime:
+                  path = Path('zig-out') / name
+                  target = 'greenovercast/' + path.name
+                  if name == 'bin/webrtc_stream': target += '.aarch64'
+                  if name in ('rockchip/librockchip_mpp.so.1', 'rockchip/greenovercast-mpp-probe.aarch64'): target = 'greenovercast/' + name
+                  tar.add(path, arcname=target)
+              for path in Path('packaging/portmaster/greenovercast/greenovercast/licenses').glob('*'):
+                  tar.add(path, arcname='greenovercast/licenses/' + path.name)
+          PY
+      - name: Record outcomes
+        if: always()
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          FOCUSED: ${{ steps.focused.outcome }}
+          FORMAT: ${{ steps.format.outcome }}
+          HOST: ${{ steps.host.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          PRODUCT: ${{ steps.product.outcome }}
+          INSPECT: ${{ steps.inspect.outcome }}
+        run: |
+          mkdir -p .agents/results
+          python3 - <<'PY'
+          import os,json
+          from pathlib import Path
+          statuses = {name: os.environ[name] for name in ['BASELINE','FOCUSED','FORMAT','HOST','SMOKE','PRODUCT','INSPECT']}
+          print(json.dumps(statuses, indent=2))
+          Path('.agents/results/outcomes.json').write_text(json.dumps(statuses, indent=2))
+          PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: greenovercast-offline-inputs
-          path: ${{ runner.temp }}/greenovercast-offline-inputs.tar.gz
-          compression-level: 0
-          retention-days: 3
+          name: greenovercast-fix-evidence
+          path: |
+            .agents/results/*.log
+            .agents/results/*.txt
+            .agents/results/*.patch
+            .agents/results/*.json
+          retention-days: 7
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.inspect.outcome == 'success'
+        with:
+          name: greenovercast-fixed-runtime
+          path: .agents/results/greenovercast-fixed-runtime.tar.gz
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Require all verification steps to pass
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          statuses = json.loads(Path('.agents/results/outcomes.json').read_text())
+          assert all(value == 'success' for value in statuses.values()), statuses
+          PY
