@@ -40,6 +40,10 @@ for private_library in "$AVCODEC" "$AVUTIL" "$SWSCALE"; do
     exit 1
   }
 done
+sh "$ROOT/tools/check-aarch64-runtime.sh" \
+  "$BINARY" "$CEDAR" "$MPP_PLUGIN" "$MPP_RUNTIME" "$MPP_PROBE" \
+  "$AVCODEC" "$AVUTIL" "$SWSCALE"
+
 [ -n "$PORTMASTER_NEW" ] || {
   echo "set PORTMASTER_NEW to a current PortMaster-New checkout" >&2
   exit 1

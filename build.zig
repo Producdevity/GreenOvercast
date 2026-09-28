@@ -3,6 +3,8 @@ const std = @import("std");
 // glibc 2.38 is the oldest userspace supported by the packaged release.
 const aarch64_linux_query: std.Target.Query = .{
     .cpu_arch = .aarch64,
+    // Keep baseline ARM64 atomics independent of firmware runtime helpers.
+    .cpu_features_sub = std.Target.aarch64.featureSet(&.{.outline_atomics}),
     .os_tag = .linux,
     .abi = .gnu,
     .glibc_version = .{ .major = 2, .minor = 38, .patch = 0 },
@@ -390,14 +392,31 @@ fn addReleaseArtifacts(
         private_library_installs[index] = b.addInstallBinFile(copy.getOutput(), library.name);
     }
 
+    const runtime_check = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/check-aarch64-runtime.sh"),
+        b.getInstallPath(.bin, "webrtc_stream"),
+        b.getInstallPath(.lib, "libgreenovercast-cedar.so"),
+        b.getInstallPath(.bin, "cedar_bridge_test"),
+        b.getInstallPath(.prefix, "rockchip/libgreenovercast-mpp.so"),
+        b.getInstallPath(.prefix, "rockchip/librockchip_mpp.so.1"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-probe.aarch64"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-bridge-test.aarch64"),
+        b.getInstallPath(.bin, "libavcodec.so.63"),
+        b.getInstallPath(.bin, "libavutil.so.61"),
+        b.getInstallPath(.bin, "libswscale.so.10"),
+    });
+    runtime_check.setCwd(b.path("."));
+    runtime_check.step.dependOn(&install_executable.step);
+    runtime_check.step.dependOn(&install_cedar.step);
+    runtime_check.step.dependOn(&install_cedar_test.step);
+    runtime_check.step.dependOn(&install_mpp.step);
+    runtime_check.step.dependOn(&install_mpp_runtime.step);
+    for (mpp_device_installs) |install| runtime_check.step.dependOn(&install.step);
+    for (private_library_installs) |install| runtime_check.step.dependOn(&install.step);
+
     const release = b.step("release", "Build the aarch64 application and decoder plugins");
-    release.dependOn(&install_executable.step);
-    release.dependOn(&install_cedar.step);
-    release.dependOn(&install_cedar_test.step);
-    release.dependOn(&install_mpp.step);
-    release.dependOn(&install_mpp_runtime.step);
-    for (mpp_device_installs) |install| release.dependOn(&install.step);
-    for (private_library_installs) |install| release.dependOn(&install.step);
+    release.dependOn(&runtime_check.step);
     return release;
 }
 
@@ -511,6 +530,12 @@ pub fn build(b: *std.Build) void {
     });
     dependency_toolchain_test.setCwd(b.path("."));
     test_step.dependOn(&dependency_toolchain_test.step);
+    const aarch64_runtime_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/aarch64_runtime_test.sh"),
+    });
+    aarch64_runtime_test.setCwd(b.path("."));
+    test_step.dependOn(&aarch64_runtime_test.step);
 
     const tests = [_]struct {
         source: []const u8,

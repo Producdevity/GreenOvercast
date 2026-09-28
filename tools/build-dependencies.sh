@@ -51,7 +51,7 @@ write_wrapper() {
   driver=$2
   {
     printf '%s\n' '#!/bin/sh'
-    printf 'exec "%s" %s -target aarch64-linux-gnu.2.38 -ffile-prefix-map="%s"=. "$@"\n' \
+    printf 'exec "%s" %s -target aarch64-linux-gnu.2.38 -ffile-prefix-map="%s"=. "$@" -mno-outline-atomics\n' \
       "$ZIG" "$driver" "$ROOT"
   } >"$wrapper"
   chmod +x "$wrapper"
@@ -111,6 +111,19 @@ actual_mpp_commit=$(git -C "$MPP_SOURCE" rev-parse HEAD)
   echo "Rockchip MPP must be at $MPP_COMMIT (found $actual_mpp_commit)" >&2
   exit 1
 }
+
+# Compiler flags are not part of the per-library completion stamps. Invalidate
+# both build trees and installed libraries when the generated toolchain changes.
+toolchain_signature=$(cksum "$CC_WRAPPER" "$CXX_WRAPPER" "$TOOLCHAIN")
+cached_signature=
+if [ -f "$BUILDS/.toolchain-signature" ]; then
+  cached_signature=$(cat "$BUILDS/.toolchain-signature")
+fi
+if [ "$cached_signature" != "$toolchain_signature" ]; then
+  rm -rf "$BUILDS" "$LIBDATACHANNEL_BUILD" "$MPP_BUILD" "$PREFIX"
+  mkdir -p "$BUILDS" "$PREFIX"
+  printf '%s\n' "$toolchain_signature" >"$BUILDS/.toolchain-signature"
+fi
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

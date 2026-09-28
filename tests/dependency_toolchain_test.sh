@@ -62,3 +62,69 @@ if ! cmake -S "$fixture" -B "$fixture/build" \
   exit 1
 fi
 echo "Dependency toolchain isolation passed"
+
+# Stop before downloads, but exercise the real cache invalidation path.
+mock_bin="$TEST_ROOT/mock-bin"
+mkdir -p "$mock_bin" "$fixture/vendor/libdatachannel" "$fixture/vendor/mpp"
+: >"$fixture/vendor/libdatachannel/CMakeLists.txt"
+: >"$fixture/vendor/mpp/CMakeLists.txt"
+cat >"$mock_bin/git" <<'EOF_GIT'
+#!/bin/sh
+case "$2" in
+  */libdatachannel) echo c6696d157b5612df2a741d9a03b192b47ab6cefb ;;
+  */mpp) echo c08762ebfadeb4e986d2fed993bc7a54862d3ebe ;;
+  *) exit 1 ;;
+esac
+EOF_GIT
+cat >"$mock_bin/curl" <<'EOF_CURL'
+#!/bin/sh
+echo 'fixture: downloads intentionally disabled' >&2
+exit 1
+EOF_CURL
+chmod +x "$mock_bin/git" "$mock_bin/curl"
+run_until_download() {
+  if PATH="$mock_bin:$PATH" sh "$fixture/tools/build-dependencies.sh" \
+    >"$TEST_ROOT/cache.log" 2>&1; then
+    echo 'dependency fixture unexpectedly succeeded' >&2
+    exit 1
+  fi
+  if ! grep -F 'fixture: downloads intentionally disabled' "$TEST_ROOT/cache.log" >/dev/null; then
+    cat "$TEST_ROOT/cache.log" >&2
+    exit 1
+  fi
+}
+for directory in "$prefix" \
+  "$fixture/.tools/build/dependencies-aarch64" \
+  "$fixture/.tools/build/libdatachannel-aarch64-release" \
+  "$fixture/.tools/build/mpp-aarch64-release"; do
+  mkdir -p "$directory"
+  : >"$directory/stale-output"
+done
+run_until_download
+for directory in "$prefix" \
+  "$fixture/.tools/build/dependencies-aarch64" \
+  "$fixture/.tools/build/libdatachannel-aarch64-release" \
+  "$fixture/.tools/build/mpp-aarch64-release"; do
+  [ ! -e "$directory/stale-output" ] || {
+    echo "stale dependency survived: $directory" >&2
+    exit 1
+  }
+done
+: >"$prefix/fresh-output"
+run_until_download
+[ -f "$prefix/fresh-output" ] || {
+  echo 'unchanged toolchain unnecessarily discarded the cache' >&2
+  exit 1
+}
+printf 'old toolchain\n' >"$fixture/.tools/build/dependencies-aarch64/.toolchain-signature"
+sh "$fixture/tools/build-dependencies.sh" --toolchain-only
+[ -f "$prefix/fresh-output" ] || {
+  echo '--toolchain-only discarded dependency outputs' >&2
+  exit 1
+}
+run_until_download
+[ ! -e "$prefix/fresh-output" ] || {
+  echo 'changed toolchain reused stale installed libraries' >&2
+  exit 1
+}
+echo 'Dependency cache invalidation and unchanged-toolchain reuse passed'
