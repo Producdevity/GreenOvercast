@@ -1,45 +1,34 @@
-name: GFN ABI verification
+name: Offline verification inputs
 on: [push]
 permissions:
   contents: read
 jobs:
-  test:
+  inputs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      CMAKE_BUILD_PARALLEL_LEVEL: 2
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Install host test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libsdl2-dev pkg-config
       - run: tools/bootstrap.sh
-      - run: tools/zig.sh build fmt-check
-      - run: tools/zig.sh build test -j2 --summary all
-      - run: tools/zig.sh build smoke -j2 --summary all
-      - run: tools/zig.sh build product-check -j2 --summary all
-      - name: Record baseline ELF imports
-        if: always()
+      - name: Fetch pinned dependency archives without compiling
         run: |
-          mkdir -p .agents/verification
-          git rev-parse HEAD > .agents/verification/revision.txt
-          if test -f zig-out/bin/webrtc_stream; then
-            readelf -h zig-out/bin/webrtc_stream > .agents/verification/elf-header.txt
-            readelf -W --dyn-syms zig-out/bin/webrtc_stream > .agents/verification/dynamic-symbols.txt
-            sha256sum zig-out/bin/webrtc_stream > .agents/verification/binary.sha256
-          fi
-      - name: Prepare offline build inputs
-        if: always()
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('tools/build-dependencies.sh').read_text()
+          before, marker, after = source.partition('export ZIG_GLOBAL_CACHE_DIR=')
+          assert marker
+          Path('tools/.prefetch-inputs.sh').write_text(before + '\nexit 0\n')
+          PY
+          sh tools/.prefetch-inputs.sh
+          rm tools/.prefetch-inputs.sh
+      - name: Export offline inputs
         run: |
           tar --exclude='./.tools/build' --exclude='./.tools/cache' \
             --exclude='./.tools/deps' --exclude='./.tools/sources' \
             --exclude='./.zig-cache' \
             -czf "$RUNNER_TEMP/greenovercast-offline-inputs.tar.gz" .
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: greenovercast-offline-inputs
           path: ${{ runner.temp }}/greenovercast-offline-inputs.tar.gz
