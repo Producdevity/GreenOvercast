@@ -2,6 +2,8 @@ const std = @import("std");
 
 pub const max_games = 1024;
 pub const product_id_capacity = 64;
+pub const frames_per_second_choices = [_]u16{ 30, 60 };
+pub const bitrate_choices_kbps = [_]u32{ 4000, 6000, 8000, 12000, 16000, 20000 };
 
 pub const FaceButtonMode = enum {
     system,
@@ -124,10 +126,14 @@ pub const Store = struct {
                 self.artwork_enabled = std.mem.eql(u8, value, "1");
             } else if (std.mem.eql(u8, kind, "frames_per_second")) {
                 const value = fields.next() orelse continue;
-                self.frames_per_second = std.fmt.parseUnsigned(u16, value, 10) catch continue;
+                const parsed = std.fmt.parseUnsigned(u16, value, 10) catch continue;
+                if (isChoice(u16, &frames_per_second_choices, parsed))
+                    self.frames_per_second = parsed;
             } else if (std.mem.eql(u8, kind, "max_bitrate_kbps")) {
                 const value = fields.next() orelse continue;
-                self.max_bitrate_kbps = std.fmt.parseUnsigned(u32, value, 10) catch continue;
+                const parsed = std.fmt.parseUnsigned(u32, value, 10) catch continue;
+                if (isChoice(u32, &bitrate_choices_kbps, parsed))
+                    self.max_bitrate_kbps = parsed;
             } else if (std.mem.eql(u8, kind, "game")) {
                 const id = fields.next() orelse continue;
                 const favorite = fields.next() orelse continue;
@@ -149,6 +155,10 @@ pub fn validProductId(value: []const u8) bool {
         if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
     }
     return true;
+}
+
+fn isChoice(comptime T: type, choices: []const T, value: T) bool {
+    return std.mem.indexOfScalar(T, choices, value) != null;
 }
 
 test "settings round trip through the file format" {
@@ -178,4 +188,19 @@ test "settings reject unknown versions and unsafe ids" {
     try std.testing.expectError(error.UnsupportedSettings, store.parse("version\t1\nversion\t1\n"));
     try std.testing.expectError(error.UnsupportedSettings, store.parse("artwork\t0\nversion\t1\n"));
     try std.testing.expect(store.game("bad\tid") == null);
+}
+
+test "settings keep stream quality within the supported choices" {
+    var store = Store{};
+    try store.parse("version\t1\nframes_per_second\t60\nmax_bitrate_kbps\t12000\n");
+    try std.testing.expectEqual(@as(u16, 60), store.frames_per_second);
+    try std.testing.expectEqual(@as(u32, 12000), store.max_bitrate_kbps);
+
+    var invalid = Store{};
+    try invalid.parse("version\t1\nframes_per_second\t1\nmax_bitrate_kbps\t0\n");
+    try std.testing.expectEqual(@as(u16, 30), invalid.frames_per_second);
+    try std.testing.expectEqual(@as(u32, 6000), invalid.max_bitrate_kbps);
+
+    try invalid.parse("version\t1\nmax_bitrate_kbps\t4294967295\n");
+    try std.testing.expectEqual(@as(u32, 6000), invalid.max_bitrate_kbps);
 }

@@ -29,7 +29,7 @@ const Row = enum {
     sign_out,
 };
 
-const bitrate_choices = [_]u32{ 4000, 6000, 8000, 12000, 16000, 20000 };
+const bitrate_choices = settings.bitrate_choices_kbps;
 
 fn nextBitrate(current: u32) u32 {
     for (bitrate_choices, 0..) |value, index| {
