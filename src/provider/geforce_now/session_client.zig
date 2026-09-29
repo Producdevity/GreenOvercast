@@ -33,6 +33,7 @@ pub const Client = struct {
     last_response_retryable: ?bool = null,
     stream_width: u16 = fallback_stream_width,
     stream_height: u16 = fallback_stream_height,
+    requested_frames_per_second: u16 = preferred_frames_per_second,
     stream_frames_per_second: u16 = preferred_frames_per_second,
 
     pub fn create(
@@ -48,6 +49,9 @@ pub const Client = struct {
             .client_id = undefined,
         };
         uuid.generate(&client.client_id);
+        const configured_fps = c.go_handheld_ui_frames_per_second(client.ui);
+        if (configured_fps > 0) client.requested_frames_per_second = @intCast(configured_fps);
+        client.stream_frames_per_second = client.requested_frames_per_second;
         return client;
     }
 
@@ -348,7 +352,7 @@ pub const Client = struct {
     ) !void {
         self.stream_width = fallback_stream_width;
         self.stream_height = fallback_stream_height;
-        self.stream_frames_per_second = preferred_frames_per_second;
+        self.stream_frames_per_second = self.requested_frames_per_second;
         const summary = self.fetchSubscriptionStatus(provider_url, bearer) catch |err| {
             if (err == error.Cancelled) return err;
             std.debug.print("GeForce NOW membership check unavailable: {s}\n", .{@errorName(err)});
@@ -369,7 +373,7 @@ pub const Client = struct {
         if (summary.bestForDisplayWithin(
             display_width,
             display_height,
-            preferred_frames_per_second,
+            self.requested_frames_per_second,
             maximum_stream_width,
             maximum_stream_height,
         )) |selected| {
@@ -729,4 +733,26 @@ test "membership and region discovery requests preserve cancellation" {
     ));
     try std.testing.expectEqual(@as(usize, 1), http.requests);
     try std.testing.expectEqual(@as(usize, 1), http.polls);
+}
+
+test "stream mode selection keeps the configured frame rate" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+        .requested_frames_per_second = 60,
+    };
+    http.replyJson(
+        \\{"features":{"resolutions":[
+        \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":30,"isEntitled":true},
+        \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":60,"isEntitled":true}
+        \\]}}
+    );
+    try client.selectStreamMode("https://example.invalid/", auth.bearer().?, 640, 480);
+    try std.testing.expectEqual(@as(u16, 60), client.stream_frames_per_second);
 }

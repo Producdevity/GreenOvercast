@@ -747,3 +747,11 @@ pub export fn go_handheld_ui_stream_width(ui: ?*const Ui) c_uint {
 pub export fn go_handheld_ui_stream_height(ui: ?*const Ui) c_uint {
     return (ui orelse return 480).stream_height;
 }
+
+pub export fn go_handheld_ui_frames_per_second(ui: ?*const Ui) c_uint {
+    return (ui orelse return 30).settings.frames_per_second;
+}
+
+pub export fn go_handheld_ui_max_bitrate_kbps(ui: ?*const Ui) c_uint {
+    return (ui orelse return 6000).settings.max_bitrate_kbps;
+}

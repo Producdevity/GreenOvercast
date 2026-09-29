@@ -18,7 +18,8 @@ const c = @cImport({
 const event_capacity = 64;
 const maximum_tracks = 8;
 const maximum_channels = 8;
-const maximum_bitrate_kbps = 6000;
+const minimum_bitrate_kbps = 4000;
+const maximum_bitrate_kbps = 20000;
 
 const EarlyIceCandidates = struct {
     messages: std.BoundedArray(signaling_protocol.DecodedMessage, 32) = .{},
@@ -352,8 +353,17 @@ pub const Session = struct {
     pub fn requestBitrate(self: *Session) void {
         if (self.bitrate_requested or self.video_track < 0 or
             c.go_video_pipeline_has_media(self.video) == 0) return;
-        if (c.rtcRequestBitrate(self.video_track, maximum_bitrate_kbps * 1000) >= 0)
+        const ceiling_bps = @as(u64, self.bitrateCeilingKbps()) * 1000;
+        if (c.rtcRequestBitrate(self.video_track, @intCast(ceiling_bps)) >= 0)
             self.bitrate_requested = true;
+    }
+
+    fn bitrateCeilingKbps(self: *const Session) u32 {
+        return std.math.clamp(
+            c.go_handheld_ui_max_bitrate_kbps(self.ui),
+            minimum_bitrate_kbps,
+            maximum_bitrate_kbps,
+        );
     }
 
     pub fn destroy(self: *Session) void {
@@ -432,7 +442,7 @@ pub const Session = struct {
                     self.width,
                     self.height,
                     self.frames_per_second,
-                    maximum_bitrate_kbps,
+                    self.bitrateCeilingKbps(),
                 );
                 defer self.allocator.free(nvst);
                 try self.signaling.?.sendAnswer(narrowed_sdp, nvst);
