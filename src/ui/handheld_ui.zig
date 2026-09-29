@@ -674,7 +674,9 @@ pub export fn go_handheld_ui_set_consoles(ui: ?*Ui, rows: [*c]const c.GoUiConsol
     const limit: usize = @min(@as(usize, @intCast(count)), c.GO_UI_MAX_CONSOLES);
     for (0..limit) |index| {
         @memcpy(&handle.console_rows[index].name, &rows[index].name);
+        handle.console_rows[index].name[handle.console_rows[index].name.len - 1] = 0;
         @memcpy(&handle.console_rows[index].power_state, &rows[index].power_state);
+        handle.console_rows[index].power_state[handle.console_rows[index].power_state.len - 1] = 0;
     }
     handle.console_count = limit;
 }
