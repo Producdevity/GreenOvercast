@@ -32,10 +32,19 @@ fn debug(comptime format: []const u8, args: anytype) void {
     if (debugEnabled()) std.debug.print(format, args);
 }
 
+// This is a best-effort lookup (no consoles just hides the CONSOLES tab), so
+// it must never delay the return to the cloud UI by the full 30s HTTP
+// timeout if the xHome service is unreachable or slow.
+const fetch_timeout_seconds: c_long = 5;
+
 // Mirrors cloud_session.zig's private request() (same headers, same
 // X-MS-Device-Info shape) but against the home base URL/token discovered by
-// xbox_auth's refresh(), since go_cloud_session_request is hardwired to the
-// cloud token and must stay that way.
+// xbox_auth's refresh(). go_cloud_session_request is offering-aware (it
+// already switches between the cloud and home token/base URL), but this
+// lookup is built directly on top of the HTTP client instead of going
+// through it: it is best-effort and needs its own short timeout
+// (fetch_timeout_seconds) so an unreachable xHome service never holds up
+// the cloud sign-in flow, which go_cloud_session_request does not support.
 fn fetchConsolesJson(
     auth: *c.GoXboxAuth,
     ui: ?*c.GoHandheldUi,
@@ -73,7 +82,14 @@ fn fetchConsolesJson(
         "Accept: application/json",
         device_info_header.ptr,
     };
-    return c.go_http_request("GET", url.ptr, null, @ptrCast(&headers), headers.len);
+    return c.go_http_request_with_timeout(
+        "GET",
+        url.ptr,
+        null,
+        @ptrCast(&headers),
+        headers.len,
+        fetch_timeout_seconds,
+    );
 }
 
 fn fetchConsoles(auth: *c.GoXboxAuth, ui: ?*c.GoHandheldUi, consoles: []parser.Console) !usize {

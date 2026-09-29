@@ -16,6 +16,10 @@ const passport_scope = "service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD
 const offering_url = "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user";
 const home_offering_url = "https://xhome.gssv-play-prod.xboxlive.com/v2/login/user";
 const xbox_web_client_id = "1f907974-e22b-4810-a9de-d9647380c97e";
+// xHome discovery is best-effort and optional: an account with no linked
+// console must never make cloud sign-in wait out the full 30s HTTP timeout,
+// so it gets a much shorter deadline of its own.
+const home_offering_timeout_seconds: c_long = 5;
 
 const auth_failed: c_int = -1;
 const auth_ok: c_int = 0;
@@ -423,12 +427,13 @@ fn refresh(auth: *Auth) !c_int {
         "{{\"token\":\"{s}\",\"offeringId\":\"xhome\"}}",
         .{xsts},
     );
-    response = c.go_http_request(
+    response = c.go_http_request_with_timeout(
         "POST",
         home_offering_url,
         home_offering_body.ptr,
         @ptrCast(&gssv_headers),
         gssv_headers.len,
+        home_offering_timeout_seconds,
     );
     if (response != null and response.*.status == 200) {
         if (responseData(response)) |home_data| {
