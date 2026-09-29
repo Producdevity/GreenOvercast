@@ -507,7 +507,7 @@ pub const Release = struct {
                 return .failed;
             }
             if (c.go_webrtc_session_closed(self.webrtc) != 0) {
-                std.debug.print("Cloud game ended\n", .{});
+                std.debug.print("{s}\n", .{if (self.mode == .home) "Console game ended" else "Cloud game ended"});
                 return .session_ended;
             }
             if (c.go_video_pipeline_failed(self.video) != 0)
@@ -623,6 +623,10 @@ pub const Release = struct {
         self.mode = .cloud;
         if (stopRequested()) return .cancelled;
         if (!self.initializeMedia()) return .failed;
+        // Best effort: refreshes power state (e.g. a console that went to
+        // sleep during/after streaming) so the CONSOLES tab doesn't keep
+        // showing stale state until the next sign-in.
+        self.loadConsoles();
         return .ok;
     }
 
