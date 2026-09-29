@@ -46,7 +46,15 @@ pub const View = struct {
         self.selected = 0;
         // The consoles tab lists consoles, not titles: keep the title list empty
         // so nothing title-related (play/favorite/artwork/letter jump) can act.
-        if (self.collection == .consoles) return;
+        // Remember whatever title was selected on the way in (if any) right
+        // here, where the list gets zeroed, so switchCollection can restore
+        // it when leaving this tab. A null preserve_title_index means this
+        // call didn't come from a titles tab (e.g. a redundant rebuild while
+        // already on CONSOLES) and must not clobber an earlier save.
+        if (self.collection == .consoles) {
+            if (preserve_title_index) |index| self.saved_title_index = index;
+            return;
+        }
         for (self.titles, 0..) |*title, index| {
             if (self.collection == .favorites and !isFavorite(store, title)) continue;
             if (!search.matches(titleName(title), std.mem.sliceTo(&self.query, 0))) continue;
@@ -98,7 +106,6 @@ pub const View = struct {
             .favorites => if (has_consoles) Collection.consoles else Collection.all,
             .consoles => Collection.all,
         };
-        if (self.collection == .consoles) self.saved_title_index = preserve;
         self.rebuild(store, preserve);
     }
 
@@ -429,5 +436,31 @@ test "switchCollection without visiting CONSOLES keeps prior behavior" {
     try std.testing.expectEqual(Collection.favorites, view.collection);
     view.switchCollection(&store, -1); // .favorites -> .all
     try std.testing.expectEqual(Collection.all, view.collection);
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
+}
+
+test "a redundant rebuild while on CONSOLES doesn't clobber the saved title" {
+    // Mirrors handheld_ui.zig's START-button handler, which calls
+    // view.rebuild(store, view.selectedTitleIndex()) unconditionally after
+    // Settings closes - selectedTitleIndex() is null while on CONSOLES, so
+    // that rebuild must not overwrite the title saved on the way in.
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo"), testTitle("Charlie") };
+    var indices: [titles.len]usize = undefined;
+    const consoles = [_]ConsoleRow{std.mem.zeroes(ConsoleRow)};
+    var store = try settings.Store.init(null);
+    var view = View{ .titles = &titles, .indices = &indices, .consoles = &consoles };
+    view.rebuild(&store, null);
+    view.selected = 2;
+    const expected = view.selectedTitleIndex().?;
+
+    view.switchCollection(&store, -1); // .all -> .consoles
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+
+    // A direct rebuild call while already on CONSOLES (preserve is null,
+    // same as view.selectedTitleIndex() would give here).
+    view.rebuild(&store, view.selectedTitleIndex());
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+
+    view.switchCollection(&store, 1); // .consoles -> .all
     try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
 }
