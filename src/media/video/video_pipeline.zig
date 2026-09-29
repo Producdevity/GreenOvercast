@@ -216,8 +216,11 @@ fn publishFrame(pipeline: *Pipeline, frame: *c.AVFrame, decoder_name: [*c]const 
     pipeline.frame_mutex.lock();
     defer pipeline.frame_mutex.unlock();
     if (pipeline.smooth.load(.monotonic) and pipeline.frame_ready.load(.acquire)) {
-        c.av_frame_unref(pipeline.queued_frame);
-        pipeline.queued_valid = c.av_frame_ref(pipeline.queued_frame, frame) == 0;
+        // Only one frame can be queued ahead of display_frame; if it's still
+        // waiting to be rendered, drop this newer frame instead of
+        // overwriting (and losing) the one already queued.
+        if (!pipeline.queued_valid)
+            pipeline.queued_valid = c.av_frame_ref(pipeline.queued_frame, frame) == 0;
         return;
     }
     c.av_frame_unref(pipeline.display_frame);
