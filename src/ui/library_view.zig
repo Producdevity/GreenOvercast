@@ -37,6 +37,9 @@ pub const View = struct {
     query: [query_capacity]u8 = [_]u8{0} ** query_capacity,
     consoles: []const ConsoleRow = &.{},
     console_selected: usize = 0,
+    // Title selected just before entering the CONSOLES tab (which has no
+    // title list of its own), restored when leaving it.
+    saved_title_index: ?usize = null,
 
     pub fn rebuild(self: *View, store: *const settings.Store, preserve_title_index: ?usize) void {
         self.count = 0;
@@ -81,7 +84,9 @@ pub const View = struct {
     }
 
     pub fn switchCollection(self: *View, store: *const settings.Store, direction: i8) void {
-        const preserve = self.selectedTitleIndex();
+        // Leaving CONSOLES: the title list is empty (see rebuild), so recover
+        // the selection saved on the way in instead of losing it.
+        const preserve = if (self.collection == .consoles) self.saved_title_index else self.selectedTitleIndex();
         // Tab order: ALL -> FAVORITES -> CONSOLES (only when consoles exist) -> ALL.
         const has_consoles = self.consoles.len > 0;
         self.collection = if (direction < 0) switch (self.collection) {
@@ -93,6 +98,7 @@ pub const View = struct {
             .favorites => if (has_consoles) Collection.consoles else Collection.all,
             .consoles => Collection.all,
         };
+        if (self.collection == .consoles) self.saved_title_index = preserve;
         self.rebuild(store, preserve);
     }
 
@@ -378,4 +384,50 @@ fn titleInitial(title: *const Title) u8 {
 
 fn bufferString(buffer: []const u8) []const u8 {
     return buffer[0 .. std.mem.indexOfScalar(u8, buffer, 0) orelse buffer.len];
+}
+
+fn testTitle(name: []const u8) Title {
+    var title = std.mem.zeroes(Title);
+    @memcpy(title.name[0..name.len], name);
+    @memcpy(title.product_id[0..name.len], name);
+    return title;
+}
+
+test "switchCollection preserves the selected title across the CONSOLES tab" {
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo"), testTitle("Charlie") };
+    var indices: [titles.len]usize = undefined;
+    const consoles = [_]ConsoleRow{std.mem.zeroes(ConsoleRow)};
+    var store = try settings.Store.init(null);
+    var view = View{ .titles = &titles, .indices = &indices, .consoles = &consoles };
+    view.rebuild(&store, null);
+    view.selected = 1;
+    const expected = view.selectedTitleIndex().?;
+    try std.testing.expectEqual(@as(usize, 1), expected);
+
+    // .all -> .consoles directly (has_consoles is true).
+    view.switchCollection(&store, -1);
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+    try std.testing.expectEqual(@as(usize, 0), view.count);
+
+    // .consoles -> .all: the title selected before entering CONSOLES comes back.
+    view.switchCollection(&store, 1);
+    try std.testing.expectEqual(Collection.all, view.collection);
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
+}
+
+test "switchCollection without visiting CONSOLES keeps prior behavior" {
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo") };
+    var indices: [titles.len]usize = undefined;
+    var store = try settings.Store.init(null);
+    (store.game("Bravo") orelse unreachable).favorite = true;
+    var view = View{ .titles = &titles, .indices = &indices };
+    view.rebuild(&store, null);
+    view.selected = 1;
+    const expected = view.selectedTitleIndex().?;
+
+    view.switchCollection(&store, 1); // .all -> .favorites (no consoles)
+    try std.testing.expectEqual(Collection.favorites, view.collection);
+    view.switchCollection(&store, -1); // .favorites -> .all
+    try std.testing.expectEqual(Collection.all, view.collection);
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
 }
