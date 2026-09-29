@@ -669,7 +669,19 @@ pub export fn go_video_pipeline_push_rtp(
 
 pub export fn go_video_pipeline_set_smooth(pipeline_pointer: ?*Pipeline, smooth: c_int) void {
     const pipeline = pipeline_pointer orelse return;
-    pipeline.smooth.store(smooth != 0, .monotonic);
+    const enabled = smooth != 0;
+    pipeline.smooth.store(enabled, .monotonic);
+    if (enabled) return;
+    // Disabling smooth mode stops publishFrame from ever consulting
+    // queued_frame again, but go_video_pipeline_render still promotes it
+    // ahead of the next freshly decoded frame if it's left valid. Drop it
+    // so a stale, out-of-order frame can't be shown later.
+    pipeline.frame_mutex.lock();
+    defer pipeline.frame_mutex.unlock();
+    if (pipeline.queued_valid) {
+        c.av_frame_unref(pipeline.queued_frame);
+        pipeline.queued_valid = false;
+    }
 }
 
 pub export fn go_video_pipeline_render(pipeline_pointer: ?*Pipeline) void {
