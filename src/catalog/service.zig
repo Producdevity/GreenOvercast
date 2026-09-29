@@ -82,7 +82,11 @@ pub const Service = struct {
             return error.CatalogRequestFailed;
 
         self.count = try parser.parseTitles(response.*.data[0..response.*.len], titles);
-        if (self.count == 0) return error.EmptyCatalog;
+        // A cloud catalog with zero titles is only a dead end when there's
+        // also no console to stream from (xHome); otherwise the CONSOLES
+        // tab still has something to show.
+        if (self.count == 0 and c.go_handheld_ui_console_count(self.uiHandle()) == 0)
+            return error.EmptyCatalog;
 
         self.applyCache();
         try self.fetchMissingMetadata();
@@ -106,7 +110,8 @@ pub const Service = struct {
 
     pub fn pick(self: *Service, requested: []const u8) !PickResult {
         const titles = self.titles orelse return error.NotLoaded;
-        if (self.count == 0) return error.EmptyCatalog;
+        if (self.count == 0 and c.go_handheld_ui_console_count(self.uiHandle()) == 0)
+            return error.EmptyCatalog;
 
         var requested_buffer: [128]u8 = [_]u8{0} ** 128;
         if (requested.len >= requested_buffer.len) return error.InvalidRequestedTitle;

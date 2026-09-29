@@ -388,7 +388,9 @@ fn updateArtwork(ui: *Ui, view: *const library.View, state: *ArtworkSelection) ?
 }
 
 fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_int {
-    if (titles.len == 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    // An empty title list is only a dead end without any console to fall
+    // back to; otherwise the CONSOLES tab still has something to pick.
+    if (titles.len == 0 and ui.console_count == 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
     ui.cancelled = false;
     const indices = std.heap.c_allocator.alloc(usize, titles.len) catch return c.GO_HANDHELD_UI_PICK_CANCELLED;
     defer std.heap.c_allocator.free(indices);
@@ -662,9 +664,16 @@ pub export fn go_handheld_ui_pick_title(
     count: c_int,
     requested: [*c]const u8,
 ) c_int {
-    if (titles == null or count <= 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
-    const parsed_titles: [*]const library.Title = @ptrCast(@alignCast(titles));
-    return pickTitle(ui orelse return c.GO_HANDHELD_UI_PICK_CANCELLED, parsed_titles[0..@intCast(count)], pointerString(requested) orelse "");
+    const handle = ui orelse return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    // A zero-title catalog is only a dead end when there's also nothing on
+    // the CONSOLES tab; otherwise the picker still has something to show.
+    if (count < 0 or (count == 0 and handle.console_count == 0) or
+        (count > 0 and titles == null)) return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    const parsed_titles: []const library.Title = if (count > 0)
+        @as([*]const library.Title, @ptrCast(@alignCast(titles)))[0..@intCast(count)]
+    else
+        &.{};
+    return pickTitle(handle, parsed_titles, pointerString(requested) orelse "");
 }
 
 pub export fn go_handheld_ui_set_consoles(ui: ?*Ui, rows: [*c]const c.GoUiConsoleRow, count: c_int) void {
@@ -679,6 +688,10 @@ pub export fn go_handheld_ui_set_consoles(ui: ?*Ui, rows: [*c]const c.GoUiConsol
         handle.console_rows[index].power_state[handle.console_rows[index].power_state.len - 1] = 0;
     }
     handle.console_count = limit;
+}
+
+pub export fn go_handheld_ui_console_count(ui: ?*const Ui) c_int {
+    return @intCast((ui orelse return 0).console_count);
 }
 
 pub export fn go_handheld_ui_cancelled(ui: ?*const Ui) c_int {

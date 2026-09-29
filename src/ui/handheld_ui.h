@@ -52,6 +52,8 @@ int go_handheld_ui_pick_title(GoHandheldUi* ui, const GoCatalogTitle* titles, in
 /* Provides the xHome consoles for the CONSOLES tab (copied; count is capped at
  * GO_UI_MAX_CONSOLES). count <= 0 hides the tab. */
 void go_handheld_ui_set_consoles(GoHandheldUi* ui, const GoUiConsoleRow* rows, int count);
+/* How many consoles go_handheld_ui_set_consoles last provided. */
+int go_handheld_ui_console_count(const GoHandheldUi* ui);
 int go_handheld_ui_cancelled(const GoHandheldUi* ui);
 /* Nonzero when Settings asks for the software video decoder. */
 int go_handheld_ui_software_decoder(const GoHandheldUi* ui);
