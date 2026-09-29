@@ -34,15 +34,38 @@ GreenOvercast is experimental.
 | B                  | Back or cancel                    | Xbox B                            |
 | X                  | Search or delete a letter         | Xbox X                            |
 | Y                  | Favorite a game or clear search   | Xbox Y                            |
-| L1 / R1            | Switch All / Favorites            | Xbox LB / RB                      |
+| L1 / R1            | Switch All / Favorites / Consoles | Xbox LB / RB                      |
 | L2 / R2            | Jump by first letter              | Xbox LT / RT                      |
 | Start              | Settings or apply search          | Xbox Menu                         |
 | Select             | —                                 | Xbox View                         |
 | L3 + R3            | —                                 | Xbox Guide                        |
 | Select + Start     | Exit after holding for one second | Exit after holding for one second |
 
-Settings include Xbox/Nintendo face-button layouts, game artwork, and Sign
-out. Games that return a 16:9 stream remain letterboxed on 4:3 displays.
+Settings include Xbox/Nintendo face-button layouts, game artwork, the video
+decoder, video smoothing, and Sign out. Games that return a 16:9 stream remain
+letterboxed on 4:3 displays.
+
+The **video decoder** can be switched from Auto to Software. On some streams
+the Cedar hardware decoder leaves blocky artifacts on the right side of the
+picture; software decoding avoids them at the cost of CPU time. **Smooth video**
+keeps a second frame queued so bursts of decoded frames are not dropped, at the
+cost of up to one frame of extra latency.
+
+## Home streaming
+
+Besides Xbox Cloud Gaming, GreenOvercast can stream from your own Xbox console
+(Xbox remote play, "xHome"). It uses the same WebRTC and hardware-decode
+pipeline, so cloud streaming is unchanged.
+
+When your account has a console, a **CONSOLES** tab appears next to Favorites.
+Switch to it with L1 / R1, pick your console, and press A. The console must be
+on, with remote play enabled in its settings. The list shows each console's
+power state. Tested with an Xbox Series X on the local network.
+
+Home streaming needs no extra sign-in: it reuses the cloud login.
+
+If a game that was already running when you connected ignores the controller,
+close it on the console and start it again from the stream.
 
 ## Supported devices
 

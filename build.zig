@@ -45,6 +45,7 @@ const release_zig_roots = [_]struct {
         .path = "src/session/cloud_session.zig",
         .imports = &.{.{ .name = "json_reader", .path = "src/net/json_reader.zig" }},
     },
+    .{ .name = "greenovercast-consoles", .path = "src/catalog/consoles.zig" },
     .{
         .name = "greenovercast-webrtc",
         .path = "src/session/webrtc_session.zig",
@@ -457,29 +458,40 @@ pub fn build(b: *std.Build) void {
     rocknix_build_regression_test.setCwd(b.path("."));
     test_step.dependOn(&rocknix_build_regression_test.step);
 
-    const test_roots = [_][]const u8{
-        "src/app/state.zig",
-        "src/catalog/catalog_parser.zig",
-        "src/catalog/catalog_search.zig",
-        "src/input/wire_encoder.zig",
-        "src/input/guide_chord.zig",
-        "src/session/message_protocol.zig",
-        "src/ui/keyboard.zig",
-        "src/ui/control_icons.zig",
-        "src/ui/navigation_repeat.zig",
-        "src/ui/persistent_settings.zig",
-        "src/ui/stream_dimensions.zig",
-        "src/media/rtp/h264_depacketizer.zig",
-        "src/net/json_reader.zig",
-        "src/net/json_writer.zig",
-        "src/net/form_writer.zig",
+    const test_roots = [_]struct {
+        path: []const u8,
+        imports: []const ZigImport = &.{},
+    }{
+        .{ .path = "src/app/state.zig" },
+        .{ .path = "src/catalog/catalog_parser.zig" },
+        .{ .path = "src/catalog/catalog_search.zig" },
+        .{ .path = "src/catalog/consoles_parser.zig" },
+        .{ .path = "src/input/wire_encoder.zig" },
+        .{ .path = "src/input/guide_chord.zig" },
+        .{ .path = "src/session/message_protocol.zig" },
+        .{ .path = "src/ui/keyboard.zig" },
+        .{ .path = "src/ui/control_icons.zig" },
+        .{ .path = "src/ui/navigation_repeat.zig" },
+        .{
+            .path = "src/ui/library_view.zig",
+            .imports = &.{.{ .name = "catalog_search", .path = "src/catalog/catalog_search.zig" }},
+        },
+        .{ .path = "src/ui/persistent_settings.zig" },
+        .{ .path = "src/ui/stream_dimensions.zig" },
+        .{ .path = "src/media/rtp/h264_depacketizer.zig" },
+        .{ .path = "src/net/json_reader.zig" },
+        .{ .path = "src/net/json_writer.zig" },
+        .{ .path = "src/net/form_writer.zig" },
     };
     for (test_roots) |root| {
         const unit_tests = b.addTest(.{
-            .root_source_file = b.path(root),
+            .root_source_file = b.path(root.path),
             .target = b.graph.host,
             .optimize = .Debug,
         });
+        addProjectIncludes(b, unit_tests.root_module);
+        for (root.imports) |item|
+            addZigImport(b, unit_tests.root_module, b.graph.host, .Debug, item.name, item.path);
         test_step.dependOn(&b.addRunArtifact(unit_tests).step);
     }
 

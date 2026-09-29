@@ -16,7 +16,17 @@ typedef int (*GoUiStopRequested)(void* context);
 enum {
     GO_HANDHELD_UI_PICK_CANCELLED = -1,
     GO_HANDHELD_UI_PICK_SIGN_OUT = -2,
+    /* A console picked on the CONSOLES tab is reported as
+     * GO_HANDHELD_UI_PICK_CONSOLE_BASE - index (so -100, -101, ...). */
+    GO_HANDHELD_UI_PICK_CONSOLE_BASE = -100,
 };
+
+#define GO_UI_MAX_CONSOLES 8
+
+typedef struct {
+    char name[128];
+    char power_state[32];
+} GoUiConsoleRow;
 
 typedef enum {
     GO_HANDHELD_UI_ACTION_NONE = 0,
@@ -39,7 +49,16 @@ int go_handheld_ui_sign_in_action(GoHandheldUi* ui);
 int go_handheld_ui_wait_for_retry(GoHandheldUi* ui, const char* heading, const char* detail);
 int go_handheld_ui_pick_title(GoHandheldUi* ui, const GoCatalogTitle* titles, int count,
                               const char* requested);
+/* Provides the xHome consoles for the CONSOLES tab (copied; count is capped at
+ * GO_UI_MAX_CONSOLES). count <= 0 hides the tab. */
+void go_handheld_ui_set_consoles(GoHandheldUi* ui, const GoUiConsoleRow* rows, int count);
+/* How many consoles go_handheld_ui_set_consoles last provided. */
+int go_handheld_ui_console_count(const GoHandheldUi* ui);
 int go_handheld_ui_cancelled(const GoHandheldUi* ui);
+/* Nonzero when Settings asks for the software video decoder. */
+int go_handheld_ui_software_decoder(const GoHandheldUi* ui);
+/* Nonzero when Settings asks for frame smoothing. */
+int go_handheld_ui_smooth_video(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_width(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_height(const GoHandheldUi* ui);
 

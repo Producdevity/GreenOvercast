@@ -61,6 +61,9 @@ int go_video_pipeline_start(GoVideoPipeline* pipeline);
 void go_video_pipeline_stop(GoVideoPipeline* pipeline);
 void go_video_pipeline_push_rtp(GoVideoPipeline* pipeline, const uint8_t* packet, size_t length);
 void go_video_pipeline_render(GoVideoPipeline* pipeline);
+/* Keep a second frame waiting so a burst of decoded frames is not dropped, at the
+ * cost of up to one frame of extra latency. */
+void go_video_pipeline_set_smooth(GoVideoPipeline* pipeline, int smooth);
 int go_video_pipeline_needs_keyframe(const GoVideoPipeline* pipeline);
 int go_video_pipeline_has_media(const GoVideoPipeline* pipeline);
 int go_video_pipeline_failed(const GoVideoPipeline* pipeline);

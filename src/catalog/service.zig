@@ -16,6 +16,8 @@ pub const LoadResult = enum {
 
 pub const PickResult = union(enum) {
     title_id: []const u8,
+    // Index into the console list previously given to the UI (xHome).
+    console: usize,
     cancelled,
     sign_out,
 };
@@ -80,7 +82,11 @@ pub const Service = struct {
             return error.CatalogRequestFailed;
 
         self.count = try parser.parseTitles(response.*.data[0..response.*.len], titles);
-        if (self.count == 0) return error.EmptyCatalog;
+        // A cloud catalog with zero titles is only a dead end when there's
+        // also no console to stream from (xHome); otherwise the CONSOLES
+        // tab still has something to show.
+        if (self.count == 0 and c.go_handheld_ui_console_count(self.uiHandle()) == 0)
+            return error.EmptyCatalog;
 
         self.applyCache();
         try self.fetchMissingMetadata();
@@ -104,7 +110,8 @@ pub const Service = struct {
 
     pub fn pick(self: *Service, requested: []const u8) !PickResult {
         const titles = self.titles orelse return error.NotLoaded;
-        if (self.count == 0) return error.EmptyCatalog;
+        if (self.count == 0 and c.go_handheld_ui_console_count(self.uiHandle()) == 0)
+            return error.EmptyCatalog;
 
         var requested_buffer: [128]u8 = [_]u8{0} ** 128;
         if (requested.len >= requested_buffer.len) return error.InvalidRequestedTitle;
@@ -117,6 +124,11 @@ pub const Service = struct {
         );
         if (selected == c.GO_HANDHELD_UI_PICK_SIGN_OUT) return .sign_out;
         if (selected == c.GO_HANDHELD_UI_PICK_CANCELLED) return .cancelled;
+        if (selected <= c.GO_HANDHELD_UI_PICK_CONSOLE_BASE) {
+            const index: usize = @intCast(c.GO_HANDHELD_UI_PICK_CONSOLE_BASE - selected);
+            std.debug.print("Selected console index: {d}\n", .{index});
+            return .{ .console = index };
+        }
         if (selected < 0) return error.InvalidSelection;
         if (selected >= self.count) return error.InvalidSelection;
         const title = &titles[@intCast(selected)];

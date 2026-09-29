@@ -17,6 +17,15 @@ pub const Title = c.GoCatalogTitle;
 pub const Collection = enum {
     all,
     favorites,
+    // xHome: the user's own consoles instead of cloud titles. Only reachable
+    // when at least one console was found (see View.consoles).
+    consoles,
+};
+
+// Layout-compatible with GoUiConsoleRow in handheld_ui.h.
+pub const ConsoleRow = extern struct {
+    name: [128]u8,
+    power_state: [32]u8,
 };
 
 pub const View = struct {
@@ -26,10 +35,26 @@ pub const View = struct {
     selected: usize = 0,
     collection: Collection = .all,
     query: [query_capacity]u8 = [_]u8{0} ** query_capacity,
+    consoles: []const ConsoleRow = &.{},
+    console_selected: usize = 0,
+    // Title selected just before entering the CONSOLES tab (which has no
+    // title list of its own), restored when leaving it.
+    saved_title_index: ?usize = null,
 
     pub fn rebuild(self: *View, store: *const settings.Store, preserve_title_index: ?usize) void {
         self.count = 0;
         self.selected = 0;
+        // The consoles tab lists consoles, not titles: keep the title list empty
+        // so nothing title-related (play/favorite/artwork/letter jump) can act.
+        // Remember whatever title was selected on the way in (if any) right
+        // here, where the list gets zeroed, so switchCollection can restore
+        // it when leaving this tab. A null preserve_title_index means this
+        // call didn't come from a titles tab (e.g. a redundant rebuild while
+        // already on CONSOLES) and must not clobber an earlier save.
+        if (self.collection == .consoles) {
+            if (preserve_title_index) |index| self.saved_title_index = index;
+            return;
+        }
         for (self.titles, 0..) |*title, index| {
             if (self.collection == .favorites and !isFavorite(store, title)) continue;
             if (!search.matches(titleName(title), std.mem.sliceTo(&self.query, 0))) continue;
@@ -51,6 +76,14 @@ pub const View = struct {
     }
 
     pub fn move(self: *View, direction: i8) void {
+        if (self.collection == .consoles) {
+            if (self.consoles.len == 0) return;
+            if (direction < 0)
+                self.console_selected = if (self.console_selected == 0) self.consoles.len - 1 else self.console_selected - 1
+            else
+                self.console_selected = if (self.console_selected + 1 >= self.consoles.len) 0 else self.console_selected + 1;
+            return;
+        }
         if (self.count == 0) return;
         if (direction < 0)
             self.selected = if (self.selected == 0) self.count - 1 else self.selected - 1
@@ -59,11 +92,20 @@ pub const View = struct {
     }
 
     pub fn switchCollection(self: *View, store: *const settings.Store, direction: i8) void {
-        const preserve = self.selectedTitleIndex();
-        self.collection = if (direction < 0)
-            (if (self.collection == .all) .favorites else .all)
-        else
-            (if (self.collection == .favorites) .all else .favorites);
+        // Leaving CONSOLES: the title list is empty (see rebuild), so recover
+        // the selection saved on the way in instead of losing it.
+        const preserve = if (self.collection == .consoles) self.saved_title_index else self.selectedTitleIndex();
+        // Tab order: ALL -> FAVORITES -> CONSOLES (only when consoles exist) -> ALL.
+        const has_consoles = self.consoles.len > 0;
+        self.collection = if (direction < 0) switch (self.collection) {
+            .all => if (has_consoles) Collection.consoles else Collection.favorites,
+            .favorites => Collection.all,
+            .consoles => Collection.favorites,
+        } else switch (self.collection) {
+            .all => Collection.favorites,
+            .favorites => if (has_consoles) Collection.consoles else Collection.all,
+            .consoles => Collection.all,
+        };
         self.rebuild(store, preserve);
     }
 
@@ -149,7 +191,11 @@ pub fn draw(
     style.drawMark(renderer);
     font.text(renderer, 78, 12, 4, "GREENOVERCAST", style.bright());
 
-    drawTabs(renderer, view.collection);
+    drawTabs(renderer, view.collection, view.consoles.len > 0);
+    if (view.collection == .consoles) {
+        drawConsoles(renderer, view, store);
+        return;
+    }
     if (view.count == 0) {
         const empty = if (view.collection == .favorites) "NO FAVORITES YET" else "NO MATCHING GAMES";
         font.text(renderer, 28, 206, 3, empty, style.muted());
@@ -221,12 +267,14 @@ pub fn draw(
     c.SDL_RenderPresent(renderer);
 }
 
-fn drawTabs(renderer: *c.SDL_Renderer, active: Collection) void {
+fn drawTabs(renderer: *c.SDL_Renderer, active: Collection, has_consoles: bool) void {
     const labels = [_]struct { Collection, [*:0]const u8, c_int }{
         .{ .all, "ALL", 210 },
         .{ .favorites, "FAVORITES", 300 },
+        .{ .consoles, "CONSOLES", 430 },
     };
     for (labels) |entry| {
+        if (entry[0] == .consoles and !has_consoles) continue;
         if (entry[0] == active) {
             style.setColor(renderer, style.selection());
             var rect = c.SDL_Rect{ .x = entry[2] - 10, .y = 48, .w = font.textWidth(entry[1], 2) + 20, .h = 24 };
@@ -234,6 +282,54 @@ fn drawTabs(renderer: *c.SDL_Renderer, active: Collection) void {
         }
         font.text(renderer, entry[2], 52, 2, entry[1], if (entry[0] == active) style.bright() else style.muted());
     }
+}
+
+// xHome tab: one row per console (name + power state). Selecting a row and
+// pressing A starts a home stream to that console.
+fn drawConsoles(renderer: *c.SDL_Renderer, view: *const View, store: *const settings.Store) void {
+    const visible_rows: usize = 9;
+    var start = view.console_selected -| visible_rows / 2;
+    start = @min(start, view.consoles.len -| visible_rows);
+    var row: usize = 0;
+    while (row < visible_rows) : (row += 1) {
+        const index = start + row;
+        if (index >= view.consoles.len) break;
+        const console = &view.consoles[index];
+        const y: c_int = @intCast(86 + row * 36);
+        const selected = index == view.console_selected;
+        if (selected) {
+            style.setColor(renderer, style.selection());
+            var highlight = c.SDL_Rect{ .x = 14, .y = y, .w = 612, .h = 32 };
+            _ = c.SDL_RenderFillRect(renderer, &highlight);
+            style.setColor(renderer, style.accent());
+            var bar = c.SDL_Rect{ .x = 14, .y = y, .w = 5, .h = 32 };
+            _ = c.SDL_RenderFillRect(renderer, &bar);
+        }
+        const state_text: [*c]const u8 = if (console.power_state[0] != 0) @ptrCast(&console.power_state) else "UNKNOWN";
+        const awake = std.ascii.eqlIgnoreCase(bufferString(&console.power_state), "On");
+        const state_width = font.textWidth(state_text, 2);
+        font.textEllipsized(
+            renderer,
+            30,
+            y + 5,
+            3,
+            @ptrCast(&console.name),
+            612 - state_width - 60,
+            if (selected) style.bright() else style.muted(),
+        );
+        font.text(renderer, 626 - state_width - 8, y + 9, 2, state_text, if (awake) style.accent() else style.warning());
+    }
+    const primary = [_]controls.Prompt{
+        controls.Prompt.one(controls.face(store.face_buttons, .a), "STREAM"),
+        controls.Prompt.one(controls.face(store.face_buttons, .b), "BACK"),
+    };
+    const secondary = [_]controls.Prompt{
+        controls.Prompt.two(.left_bumper, .right_bumper, "TAB"),
+        controls.Prompt.one(.start, "SETTINGS"),
+    };
+    controls.drawRow(renderer, 16, 431, &primary, style.bright());
+    controls.drawRow(renderer, 16, 455, &secondary, style.accent());
+    c.SDL_RenderPresent(renderer);
 }
 
 fn drawArtwork(renderer: *c.SDL_Renderer, artwork: *c.SDL_Texture) void {
@@ -295,4 +391,76 @@ fn titleInitial(title: *const Title) u8 {
 
 fn bufferString(buffer: []const u8) []const u8 {
     return buffer[0 .. std.mem.indexOfScalar(u8, buffer, 0) orelse buffer.len];
+}
+
+fn testTitle(name: []const u8) Title {
+    var title = std.mem.zeroes(Title);
+    @memcpy(title.name[0..name.len], name);
+    @memcpy(title.product_id[0..name.len], name);
+    return title;
+}
+
+test "switchCollection preserves the selected title across the CONSOLES tab" {
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo"), testTitle("Charlie") };
+    var indices: [titles.len]usize = undefined;
+    const consoles = [_]ConsoleRow{std.mem.zeroes(ConsoleRow)};
+    var store = try settings.Store.init(null);
+    var view = View{ .titles = &titles, .indices = &indices, .consoles = &consoles };
+    view.rebuild(&store, null);
+    view.selected = 1;
+    const expected = view.selectedTitleIndex().?;
+    try std.testing.expectEqual(@as(usize, 1), expected);
+
+    // .all -> .consoles directly (has_consoles is true).
+    view.switchCollection(&store, -1);
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+    try std.testing.expectEqual(@as(usize, 0), view.count);
+
+    // .consoles -> .all: the title selected before entering CONSOLES comes back.
+    view.switchCollection(&store, 1);
+    try std.testing.expectEqual(Collection.all, view.collection);
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
+}
+
+test "switchCollection without visiting CONSOLES keeps prior behavior" {
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo") };
+    var indices: [titles.len]usize = undefined;
+    var store = try settings.Store.init(null);
+    (store.game("Bravo") orelse unreachable).favorite = true;
+    var view = View{ .titles = &titles, .indices = &indices };
+    view.rebuild(&store, null);
+    view.selected = 1;
+    const expected = view.selectedTitleIndex().?;
+
+    view.switchCollection(&store, 1); // .all -> .favorites (no consoles)
+    try std.testing.expectEqual(Collection.favorites, view.collection);
+    view.switchCollection(&store, -1); // .favorites -> .all
+    try std.testing.expectEqual(Collection.all, view.collection);
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
+}
+
+test "a redundant rebuild while on CONSOLES doesn't clobber the saved title" {
+    // Mirrors handheld_ui.zig's START-button handler, which calls
+    // view.rebuild(store, view.selectedTitleIndex()) unconditionally after
+    // Settings closes - selectedTitleIndex() is null while on CONSOLES, so
+    // that rebuild must not overwrite the title saved on the way in.
+    const titles = [_]Title{ testTitle("Alpha"), testTitle("Bravo"), testTitle("Charlie") };
+    var indices: [titles.len]usize = undefined;
+    const consoles = [_]ConsoleRow{std.mem.zeroes(ConsoleRow)};
+    var store = try settings.Store.init(null);
+    var view = View{ .titles = &titles, .indices = &indices, .consoles = &consoles };
+    view.rebuild(&store, null);
+    view.selected = 2;
+    const expected = view.selectedTitleIndex().?;
+
+    view.switchCollection(&store, -1); // .all -> .consoles
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+
+    // A direct rebuild call while already on CONSOLES (preserve is null,
+    // same as view.selectedTitleIndex() would give here).
+    view.rebuild(&store, view.selectedTitleIndex());
+    try std.testing.expectEqual(Collection.consoles, view.collection);
+
+    view.switchCollection(&store, 1); // .consoles -> .all
+    try std.testing.expectEqual(expected, view.selectedTitleIndex().?);
 }

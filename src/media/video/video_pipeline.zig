@@ -55,11 +55,15 @@ const Pipeline = struct {
     texture_width: c_int = 0,
     texture_height: c_int = 0,
     texture_format: c.Uint32 = c.SDL_PIXELFORMAT_UNKNOWN,
-    direct_nv12_available: bool = true,
+    direct_yuv_available: bool = true,
     upload_error_reported: bool = false,
 
     frame_mutex: std.Thread.Mutex = .{},
     display_frame: ?*c.AVFrame = null,
+    // A second slot so two frames decoded within one render tick are both shown.
+    queued_frame: ?*c.AVFrame = null,
+    queued_valid: bool = false,
+    smooth: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     render_frame: ?*c.AVFrame = null,
     frame_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -211,6 +215,14 @@ fn publishFrame(pipeline: *Pipeline, frame: *c.AVFrame, decoder_name: [*c]const 
     }
     pipeline.frame_mutex.lock();
     defer pipeline.frame_mutex.unlock();
+    if (pipeline.smooth.load(.monotonic) and pipeline.frame_ready.load(.acquire)) {
+        // Only one frame can be queued ahead of display_frame; if it's still
+        // waiting to be rendered, drop this newer frame instead of
+        // overwriting (and losing) the one already queued.
+        if (!pipeline.queued_valid)
+            pipeline.queued_valid = c.av_frame_ref(pipeline.queued_frame, frame) == 0;
+        return;
+    }
     c.av_frame_unref(pipeline.display_frame);
     if (c.av_frame_ref(pipeline.display_frame, frame) == 0)
         pipeline.frame_ready.store(true, .release);
@@ -425,23 +437,29 @@ fn configureRenderer(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
     const source_format = frame.format;
     const source_full_range: c_int = @intFromBool(frame.color_range == c.AVCOL_RANGE_JPEG);
     if (width <= 0 or height <= 0 or width > 8192 or height > 8192) return -1;
-    const direct_nv12 = source_format == c.AV_PIX_FMT_NV12 and pipeline.direct_nv12_available;
-    var requested_format: c.Uint32 = if (direct_nv12) c.SDL_PIXELFORMAT_NV12 else c.SDL_PIXELFORMAT_RGB24;
+    const direct_yuv = pipeline.direct_yuv_available and
+        (source_format == c.AV_PIX_FMT_NV12 or source_format == c.AV_PIX_FMT_YUV420P);
+    var requested_format: c.Uint32 = if (!direct_yuv)
+        c.SDL_PIXELFORMAT_RGB24
+    else if (source_format == c.AV_PIX_FMT_NV12)
+        c.SDL_PIXELFORMAT_NV12
+    else
+        c.SDL_PIXELFORMAT_IYUV;
     if (pipeline.texture != null and
         (width != pipeline.texture_width or height != pipeline.texture_height or
             requested_format != pipeline.texture_format)) destroyTexture(pipeline);
     if (pipeline.texture == null) {
-        if (direct_nv12) {
+        if (direct_yuv) {
             pipeline.texture = c.SDL_CreateTexture(
                 pipeline.renderer,
-                c.SDL_PIXELFORMAT_NV12,
+                requested_format,
                 c.SDL_TEXTUREACCESS_STREAMING,
                 width,
                 height,
             );
             if (pipeline.texture == null) {
-                std.debug.print("Direct NV12 texture unavailable: {s}\n", .{std.mem.span(c.SDL_GetError())});
-                pipeline.direct_nv12_available = false;
+                std.debug.print("Direct YUV texture unavailable: {s}\n", .{std.mem.span(c.SDL_GetError())});
+                pipeline.direct_yuv_available = false;
                 requested_format = c.SDL_PIXELFORMAT_RGB24;
             }
         }
@@ -462,12 +480,17 @@ fn configureRenderer(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
         pipeline.texture_height = height;
         pipeline.texture_format = requested_format;
         if (debugEnabled()) std.debug.print("Created {s} texture {d}x{d}\n", .{
-            if (requested_format == c.SDL_PIXELFORMAT_NV12) "NV12" else "RGB24",
+            if (requested_format == c.SDL_PIXELFORMAT_NV12)
+                "NV12"
+            else if (requested_format == c.SDL_PIXELFORMAT_IYUV)
+                "IYUV"
+            else
+                "RGB24",
             width,
             height,
         });
     }
-    if (pipeline.texture_format == c.SDL_PIXELFORMAT_NV12) return 0;
+    if (pipeline.texture_format != c.SDL_PIXELFORMAT_RGB24) return 0;
 
     const scaler = c.sws_getCachedContext(
         pipeline.scaler,
@@ -502,21 +525,34 @@ fn configureRenderer(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
 
 fn uploadFrame(pipeline: *Pipeline, frame: *const c.AVFrame) c_int {
     if (configureRenderer(pipeline, frame) < 0) return -1;
-    if (pipeline.texture_format == c.SDL_PIXELFORMAT_NV12) {
+    if (pipeline.texture_format != c.SDL_PIXELFORMAT_RGB24) {
         c.SDL_SetYUVConversionMode(if (frame.color_range == c.AVCOL_RANGE_JPEG)
             c.SDL_YUV_CONVERSION_JPEG
         else
             c.SDL_YUV_CONVERSION_BT709);
-        if (c.SDL_UpdateNVTexture(
-            pipeline.texture,
-            null,
-            frame.data[0],
-            frame.linesize[0],
-            frame.data[1],
-            frame.linesize[1],
-        ) == 0) return 0;
-        std.debug.print("Direct NV12 upload disabled: {s}\n", .{std.mem.span(c.SDL_GetError())});
-        pipeline.direct_nv12_available = false;
+        const uploaded = if (pipeline.texture_format == c.SDL_PIXELFORMAT_NV12)
+            c.SDL_UpdateNVTexture(
+                pipeline.texture,
+                null,
+                frame.data[0],
+                frame.linesize[0],
+                frame.data[1],
+                frame.linesize[1],
+            )
+        else
+            c.SDL_UpdateYUVTexture(
+                pipeline.texture,
+                null,
+                frame.data[0],
+                frame.linesize[0],
+                frame.data[1],
+                frame.linesize[1],
+                frame.data[2],
+                frame.linesize[2],
+            );
+        if (uploaded == 0) return 0;
+        std.debug.print("Direct YUV upload disabled: {s}\n", .{std.mem.span(c.SDL_GetError())});
+        pipeline.direct_yuv_available = false;
         destroyTexture(pipeline);
         if (configureRenderer(pipeline, frame) < 0) return -1;
     }
@@ -562,8 +598,10 @@ pub export fn go_video_pipeline_create(config_pointer: ?*const c.GoVideoPipeline
     if (pipeline.depacketizer == null or loadBootstrap(pipeline) != 0) return null;
     pipeline.decoded_frame = c.av_frame_alloc();
     pipeline.display_frame = c.av_frame_alloc();
+    pipeline.queued_frame = c.av_frame_alloc();
     pipeline.render_frame = c.av_frame_alloc();
-    if (pipeline.decoded_frame == null or pipeline.display_frame == null or pipeline.render_frame == null)
+    if (pipeline.decoded_frame == null or pipeline.display_frame == null or
+        pipeline.queued_frame == null or pipeline.render_frame == null)
         return null;
     if (selectDecoder(pipeline, config.decoder_preference) != 0) return null;
     return pipeline;
@@ -629,6 +667,23 @@ pub export fn go_video_pipeline_push_rtp(
     pipeline.packet_condition.signal();
 }
 
+pub export fn go_video_pipeline_set_smooth(pipeline_pointer: ?*Pipeline, smooth: c_int) void {
+    const pipeline = pipeline_pointer orelse return;
+    const enabled = smooth != 0;
+    pipeline.smooth.store(enabled, .monotonic);
+    if (enabled) return;
+    // Disabling smooth mode stops publishFrame from ever consulting
+    // queued_frame again, but go_video_pipeline_render still promotes it
+    // ahead of the next freshly decoded frame if it's left valid. Drop it
+    // so a stale, out-of-order frame can't be shown later.
+    pipeline.frame_mutex.lock();
+    defer pipeline.frame_mutex.unlock();
+    if (pipeline.queued_valid) {
+        c.av_frame_unref(pipeline.queued_frame);
+        pipeline.queued_valid = false;
+    }
+}
+
 pub export fn go_video_pipeline_render(pipeline_pointer: ?*Pipeline) void {
     const pipeline = pipeline_pointer orelse return;
     if (!pipeline.frame_ready.load(.acquire)) return;
@@ -636,7 +691,12 @@ pub export fn go_video_pipeline_render(pipeline_pointer: ?*Pipeline) void {
     if (pipeline.frame_ready.load(.acquire)) {
         c.av_frame_unref(pipeline.render_frame);
         c.av_frame_move_ref(pipeline.render_frame, pipeline.display_frame);
-        pipeline.frame_ready.store(false, .release);
+        if (pipeline.queued_valid) {
+            c.av_frame_move_ref(pipeline.display_frame, pipeline.queued_frame);
+            pipeline.queued_valid = false;
+        } else {
+            pipeline.frame_ready.store(false, .release);
+        }
     }
     pipeline.frame_mutex.unlock();
     const frame = pipeline.render_frame orelse return;
@@ -735,9 +795,12 @@ pub export fn go_video_pipeline_destroy(pipeline_pointer: ?*Pipeline) c_int {
     pipeline.frame_mutex.lock();
     pipeline.frame_ready.store(false, .release);
     if (pipeline.display_frame) |frame| c.av_frame_unref(frame);
+    if (pipeline.queued_frame) |frame| c.av_frame_unref(frame);
+    pipeline.queued_valid = false;
     pipeline.frame_mutex.unlock();
     freeFrame(&pipeline.render_frame);
     freeFrame(&pipeline.display_frame);
+    freeFrame(&pipeline.queued_frame);
     if (pipeline.scaler) |scaler| c.sws_freeContext(scaler);
     c.free(pipeline.rgb_buffer);
     destroyTexture(pipeline);

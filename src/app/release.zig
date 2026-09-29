@@ -6,6 +6,7 @@ const c = @cImport({
     @cInclude("curl/curl.h");
     @cInclude("audio_pipeline.h");
     @cInclude("cloud_session.h");
+    @cInclude("consoles.h");
     @cInclude("controller.h");
     @cInclude("handheld_ui.h");
     @cInclude("sdl_platform.h");
@@ -53,13 +54,26 @@ fn debug(comptime format: []const u8, args: anytype) void {
     if (debugEnabled()) std.debug.print(format, args);
 }
 
+// Cloud = xCloud Game Pass title; home = xHome stream from the user's own
+// console. Everything after picking (play/state/connect/WebRTC/keepalive) runs
+// on whichever session handle matches; cloud stays the default.
+const Mode = enum { cloud, home };
+
 pub const Release = struct {
     platform: ?*c.GoSdlPlatform = null,
     video: ?*c.GoVideoPipeline = null,
     audio: ?*c.GoAudioPipeline = null,
     auth: ?*c.GoXboxAuth = null,
     cloud: ?*c.GoCloudSession = null,
+    home: ?*c.GoCloudSession = null,
+    mode: Mode = .cloud,
+    consoles: [c.GO_UI_MAX_CONSOLES]c.GoConsole = undefined,
+    console_count: usize = 0,
+    server_id: [64]u8 = [_]u8{0} ** 64,
+    home_needs_connect: bool = false,
+    home_provisioned: bool = false,
     webrtc: ?*c.GoWebrtcSession = null,
+    software_decoder: bool = false,
     catalog: ?*catalog_service.Service = null,
     curl_initialized: bool = false,
     requested_title: [128]u8 = [_]u8{0} ** 128,
@@ -76,6 +90,9 @@ pub const Release = struct {
             std.debug.print("Invalid GREENOVERCAST_VIDEO_DECODER value\n", .{});
             return false;
         }
+        if (decoder_value == null and c.go_handheld_ui_software_decoder(self.ui()) != 0)
+            decoder_preference = c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE;
+        self.software_decoder = decoder_preference == c.GO_VIDEO_DECODER_PREFERENCE_SOFTWARE;
         const config = c.GoVideoPipelineConfig{
             .renderer = c.go_sdl_platform_renderer(self.platform),
             .bootstrap_path = if (bootstrap_path) |path| path.ptr else null,
@@ -99,6 +116,18 @@ pub const Release = struct {
             return false;
         }
         return true;
+    }
+
+    // Settings can switch the video decoder between streams; rebuild the media
+    // pipeline when the wanted decoder no longer matches the running one.
+    fn refreshDecoder(self: *Release) bool {
+        const wanted = if (std.posix.getenv("GREENOVERCAST_VIDEO_DECODER")) |value|
+            std.mem.eql(u8, value, "software")
+        else
+            c.go_handheld_ui_software_decoder(self.ui()) != 0;
+        if (wanted == self.software_decoder) return true;
+        self.destroyMedia();
+        return self.initializeMedia();
     }
 
     fn destroyMedia(self: *Release) void {
@@ -160,6 +189,8 @@ pub const Release = struct {
             release.close();
             return null;
         }
+        // Optional: without it the app simply stays cloud-only.
+        release.home = c.go_cloud_session_create_home(release.auth, release.ui());
         return release;
     }
 
@@ -169,6 +200,42 @@ pub const Release = struct {
 
     fn controller(self: *const Release) ?*c.GoControllerInput {
         return c.go_sdl_platform_controller(self.platform);
+    }
+
+    fn activeSession(self: *const Release) ?*c.GoCloudSession {
+        return if (self.mode == .home) self.home else self.cloud;
+    }
+
+    // Best effort: no consoles (or any failure) just hides the CONSOLES tab.
+    fn loadConsoles(self: *Release) void {
+        self.console_count = 0;
+        c.go_handheld_ui_set_consoles(self.ui(), null, 0);
+        if (self.home == null) return;
+        const count = c.go_consoles_fetch(self.auth, self.ui(), &self.consoles, self.consoles.len);
+        if (count <= 0) return;
+        self.console_count = @intCast(count);
+        var rows: [c.GO_UI_MAX_CONSOLES]c.GoUiConsoleRow = undefined;
+        for (0..self.console_count) |index| {
+            rows[index] = std.mem.zeroes(c.GoUiConsoleRow);
+            @memcpy(&rows[index].name, &self.consoles[index].device_name);
+            @memcpy(&rows[index].power_state, &self.consoles[index].power_state);
+        }
+        c.go_handheld_ui_set_consoles(self.ui(), &rows, @intCast(self.console_count));
+    }
+
+    fn selectConsole(self: *Release, index: usize) Result {
+        if (index >= self.console_count) return .failed;
+        const server_id = std.mem.sliceTo(&self.consoles[index].server_id, 0);
+        if (server_id.len == 0 or server_id.len >= self.server_id.len) return .failed;
+        @memset(&self.server_id, 0);
+        @memcpy(self.server_id[0..server_id.len], server_id);
+        @memset(&self.title_id, 0);
+        self.mode = .home;
+        debug("Selected console: {s} ({s})\n", .{
+            std.mem.sliceTo(&self.consoles[index].device_name, 0),
+            server_id,
+        });
+        return .ok;
     }
 
     fn drawLoading(self: *Release, heading: [*c]const u8, detail: [*c]const u8, action: c.GoHandheldUiAction) void {
@@ -201,7 +268,10 @@ pub const Release = struct {
         self.drawLoading("SIGNING IN", "REFRESHING XBOX SESSION", c.GO_HANDHELD_UI_ACTION_NONE);
         debug("Refreshing auth\n", .{});
         return switch (c.go_xbox_auth_refresh(self.auth)) {
-            c.GO_XBOX_AUTH_OK => .ok,
+            c.GO_XBOX_AUTH_OK => result: {
+                self.loadConsoles();
+                break :result .ok;
+            },
             c.GO_XBOX_AUTH_REAUTH_REQUIRED => result: {
                 self.drawLoading("SIGN IN EXPIRED", "REQUESTING A NEW DEVICE CODE", c.GO_HANDHELD_UI_ACTION_NONE);
                 c.SDL_Delay(700);
@@ -251,10 +321,12 @@ pub const Release = struct {
         @memset(&self.requested_title, 0);
         const selected = switch (selection) {
             .title_id => |value| value,
+            .console => |index| return self.selectConsole(index),
             .cancelled => return .cancelled,
             .sign_out => return .signed_out,
         };
         if (selected.len >= self.title_id.len) return .failed;
+        self.mode = .cloud;
         @memset(&self.title_id, 0);
         @memcpy(self.title_id[0..selected.len], selected);
         return .ok;
@@ -273,6 +345,19 @@ pub const Release = struct {
     }
 
     pub fn createSession(self: *Release) Result {
+        if (!self.refreshDecoder()) return .failed;
+        if (self.mode == .home) {
+            if (self.server_id[0] == 0 or self.home == null) return .failed;
+            self.drawLoading("STARTING STREAM", "CONNECTING TO YOUR XBOX", c.GO_HANDHELD_UI_ACTION_CANCEL);
+            debug("Creating home session ({s})\n", .{std.mem.sliceTo(&self.server_id, 0)});
+            self.home_needs_connect = false;
+            self.home_provisioned = false;
+            if (c.go_cloud_session_start_game(self.home, @ptrCast(&self.server_id)) < 0) {
+                std.debug.print("Home session creation failed (is the console on and reachable?)\n", .{});
+                return .failed;
+            }
+            return .ok;
+        }
         if (self.title_id[0] == 0) return .failed;
         self.drawLoading("STARTING GAME", "ALLOCATING CLOUD SESSION", c.GO_HANDHELD_UI_ACTION_CANCEL);
         debug("Creating session ({s})\n", .{std.mem.sliceTo(&self.title_id, 0)});
@@ -284,6 +369,20 @@ pub const Release = struct {
     }
 
     pub fn waitReady(self: *Release) Result {
+        if (self.mode == .home) {
+            // An awake console usually goes straight to Provisioned; only a
+            // ReadyToConnect state needs the connect step first.
+            debug("Waiting for the console session (ReadyToConnect/Provisioned)\n", .{});
+            const state = c.go_cloud_session_wait_ready_or_provisioned(self.home, 100);
+            if (state < 0) {
+                if (c.go_handheld_ui_cancelled(self.ui()) != 0) return .cancelled;
+                std.debug.print("Console session never became ready\n", .{});
+                return .failed;
+            }
+            self.home_needs_connect = state == 1;
+            self.home_provisioned = state == 2;
+            return .ok;
+        }
         debug("Waiting for ReadyToConnect\n", .{});
         if (c.go_cloud_session_wait_for_state(self.cloud, "ReadyToConnect", 100) < 0) {
             if (c.go_handheld_ui_cancelled(self.ui()) != 0) return .cancelled;
@@ -294,8 +393,12 @@ pub const Release = struct {
     }
 
     pub fn connect(self: *Release) Result {
+        if (self.mode == .home and !self.home_needs_connect) {
+            debug("Home session needs no connect step\n", .{});
+            return .ok;
+        }
         debug("Connecting\n", .{});
-        if (c.go_cloud_session_connect(self.cloud) < 0) {
+        if (c.go_cloud_session_connect(self.activeSession()) < 0) {
             std.debug.print("Connect failed\n", .{});
             return .failed;
         }
@@ -303,8 +406,9 @@ pub const Release = struct {
     }
 
     pub fn waitProvisioned(self: *Release) Result {
+        if (self.mode == .home and self.home_provisioned) return .ok;
         debug("Waiting for Provisioned\n", .{});
-        if (c.go_cloud_session_wait_for_state(self.cloud, "Provisioned", 100) < 0) {
+        if (c.go_cloud_session_wait_for_state(self.activeSession(), "Provisioned", 100) < 0) {
             if (c.go_handheld_ui_cancelled(self.ui()) != 0) return .cancelled;
             std.debug.print("Provisioning failed\n", .{});
             return .failed;
@@ -318,7 +422,7 @@ pub const Release = struct {
         const stream_width = c.go_handheld_ui_stream_width(self.ui());
         const stream_height = c.go_handheld_ui_stream_height(self.ui());
         self.webrtc = c.go_webrtc_session_create(
-            self.cloud,
+            self.activeSession(),
             self.video,
             self.audio,
             self.controller(),
@@ -381,12 +485,13 @@ pub const Release = struct {
             std.debug.print("Audio worker failed to start\n", .{});
             return .failed;
         }
-        if (c.go_cloud_session_start_keepalive(self.cloud) < 0) {
+        if (c.go_cloud_session_start_keepalive(self.activeSession()) < 0) {
             std.debug.print("Session keepalive worker failed to start\n", .{});
             return .failed;
         }
 
         const controller_input = self.controller();
+        c.go_video_pipeline_set_smooth(self.video, c.go_handheld_ui_smooth_video(self.ui()));
         while (true) {
             var event: c.SDL_Event = undefined;
             while (c.SDL_PollEvent(&event) != 0) {
@@ -402,7 +507,7 @@ pub const Release = struct {
                 return .failed;
             }
             if (c.go_webrtc_session_closed(self.webrtc) != 0) {
-                std.debug.print("Cloud game ended\n", .{});
+                std.debug.print("{s}\n", .{if (self.mode == .home) "Console game ended" else "Cloud game ended"});
                 return .session_ended;
             }
             if (c.go_video_pipeline_failed(self.video) != 0)
@@ -441,7 +546,7 @@ pub const Release = struct {
         if (!debugEnabled()) return;
         const video = c.go_video_pipeline_stats(self.video);
         const audio = c.go_audio_pipeline_stats(self.audio);
-        const cloud = c.go_cloud_session_stats(self.cloud);
+        const cloud = c.go_cloud_session_stats(self.activeSession());
         std.debug.print(
             "[{d}s] video_rtp={d} payload={d} rejected={d}/pt{d} aus={d} frames={d}/{d} source={d}x{d} " ++
                 "nals={d}/{d}/{d}/{d} ts={d} synced={d} gaps={d} missing={d} late_rtp={d} " ++
@@ -501,19 +606,27 @@ pub const Release = struct {
 
     fn closeSession(self: *Release) void {
         c.go_cloud_session_stop_keepalive(self.cloud);
+        c.go_cloud_session_stop_keepalive(self.home);
         c.go_webrtc_session_destroy(self.webrtc);
         self.webrtc = null;
         c.go_video_pipeline_stop(self.video);
         c.go_audio_pipeline_stop(self.audio);
         c.go_cloud_session_end(self.cloud);
+        c.go_cloud_session_end(self.home);
     }
 
     pub fn resetSession(self: *Release) Result {
         self.closeSession();
         self.destroyMedia();
         @memset(&self.title_id, 0);
+        @memset(&self.server_id, 0);
+        self.mode = .cloud;
         if (stopRequested()) return .cancelled;
         if (!self.initializeMedia()) return .failed;
+        // Best effort: refreshes power state (e.g. a console that went to
+        // sleep during/after streaming) so the CONSOLES tab doesn't keep
+        // showing stale state until the next sign-in.
+        self.loadConsoles();
         return .ok;
     }
 
@@ -522,6 +635,7 @@ pub const Release = struct {
         self.closeSession();
         if (self.catalog) |catalog| catalog.destroy();
         c.go_cloud_session_destroy(self.cloud);
+        c.go_cloud_session_destroy(self.home);
         c.go_xbox_auth_destroy(self.auth);
         self.destroyMedia();
         c.go_sdl_platform_destroy(self.platform);
