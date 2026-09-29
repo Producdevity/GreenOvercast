@@ -48,6 +48,8 @@ pub const Client = struct {
             .client_id = undefined,
         };
         uuid.generate(&client.client_id);
+        const configured_fps = c.go_handheld_ui_frames_per_second(client.ui);
+        if (configured_fps > 0) client.stream_frames_per_second = @intCast(configured_fps);
         return client;
     }
 

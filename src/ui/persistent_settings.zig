@@ -18,6 +18,8 @@ pub const Store = struct {
     path_length: usize = 0,
     face_buttons: FaceButtonMode = .system,
     artwork_enabled: bool = true,
+    frames_per_second: u16 = 30,
+    max_bitrate_kbps: u32 = 6000,
     games: [max_games]GameSettings = [_]GameSettings{.{}} ** max_games,
     game_count: usize = 0,
 
@@ -70,6 +72,8 @@ pub const Store = struct {
         try writer.writeAll("version\t1\n");
         try writer.print("face_buttons\t{s}\n", .{@tagName(self.face_buttons)});
         try writer.print("artwork\t{d}\n", .{@intFromBool(self.artwork_enabled)});
+        try writer.print("frames_per_second\t{d}\n", .{self.frames_per_second});
+        try writer.print("max_bitrate_kbps\t{d}\n", .{self.max_bitrate_kbps});
         for (self.games[0..self.game_count]) |*entry| {
             try writer.print("game\t{s}\t{d}\n", .{
                 productId(entry),
@@ -118,6 +122,12 @@ pub const Store = struct {
             } else if (std.mem.eql(u8, kind, "artwork")) {
                 const value = fields.next() orelse continue;
                 self.artwork_enabled = std.mem.eql(u8, value, "1");
+            } else if (std.mem.eql(u8, kind, "frames_per_second")) {
+                const value = fields.next() orelse continue;
+                self.frames_per_second = std.fmt.parseUnsigned(u16, value, 10) catch continue;
+            } else if (std.mem.eql(u8, kind, "max_bitrate_kbps")) {
+                const value = fields.next() orelse continue;
+                self.max_bitrate_kbps = std.fmt.parseUnsigned(u32, value, 10) catch continue;
             } else if (std.mem.eql(u8, kind, "game")) {
                 const id = fields.next() orelse continue;
                 const favorite = fields.next() orelse continue;

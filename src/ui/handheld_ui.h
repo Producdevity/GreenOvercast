@@ -56,6 +56,8 @@ int go_handheld_ui_pick_title(GoHandheldUi* ui, const GoCatalogTitle* titles, in
 int go_handheld_ui_cancelled(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_width(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_height(const GoHandheldUi* ui);
+unsigned int go_handheld_ui_frames_per_second(const GoHandheldUi* ui);
+unsigned int go_handheld_ui_max_bitrate_kbps(const GoHandheldUi* ui);
 void go_handheld_ui_draw_stream_controls(GoHandheldUi* ui, int mouse_mode, float pointer_x,
                                          float pointer_y, int source_width, int source_height,
                                          int show_hint);

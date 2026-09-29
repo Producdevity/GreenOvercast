@@ -23,9 +23,20 @@ const StopRequested = ?*const fn (?*anyopaque) callconv(.c) c_int;
 const Row = enum {
     face_buttons,
     artwork,
+    framerate,
+    bitrate,
     service,
     sign_out,
 };
+
+const bitrate_choices = [_]u32{ 4000, 6000, 8000, 12000, 16000, 20000 };
+
+fn nextBitrate(current: u32) u32 {
+    for (bitrate_choices, 0..) |value, index| {
+        if (value == current) return bitrate_choices[(index + 1) % bitrate_choices.len];
+    }
+    return bitrate_choices[0];
+}
 
 const Action = enum {
     none,
@@ -86,7 +97,7 @@ pub fn run(
                         repeat.begin(.down, c.SDL_GetTicks());
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_LEFT, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT => {
-                        if (selected == .face_buttons or selected == .artwork)
+                        if (selected != .service and selected != .sign_out)
                             _ = activate(selected, controller, store);
                     },
                     else => {},
@@ -130,6 +141,8 @@ fn activate(
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
+        .framerate => store.frames_per_second = if (store.frames_per_second >= 60) 30 else 60,
+        .bitrate => store.max_bitrate_kbps = nextBitrate(store.max_bitrate_kbps),
         .service => return .switch_provider,
         .sign_out => return .sign_out,
     }
@@ -165,7 +178,9 @@ fn previousRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .sign_out,
         .artwork => .face_buttons,
-        .service => .artwork,
+        .framerate => .artwork,
+        .bitrate => .framerate,
+        .service => .bitrate,
         .sign_out => .service,
     };
 }
@@ -173,7 +188,9 @@ fn previousRow(row: Row) Row {
 fn nextRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .artwork,
-        .artwork => .service,
+        .artwork => .framerate,
+        .framerate => .bitrate,
+        .bitrate => .service,
         .service => .sign_out,
         .sign_out => .face_buttons,
     };
@@ -204,13 +221,20 @@ fn draw(
     _ = c.SDL_RenderFillRect(renderer, &footer);
     font.text(renderer, 18, 14, 4, "SETTINGS", style.bright());
 
+    var fps_buffer: [16]u8 = undefined;
+    const fps_text = std.fmt.bufPrintZ(&fps_buffer, "{d} FPS", .{store.frames_per_second}) catch "30 FPS";
+    var bitrate_buffer: [16]u8 = undefined;
+    const bitrate_text = std.fmt.bufPrintZ(&bitrate_buffer, "{d} MBPS", .{store.max_bitrate_kbps / 1000}) catch "6 MBPS";
+
     drawRow(renderer, 82, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
-    drawRow(renderer, 130, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
-    drawRow(renderer, 178, "STREAMING SERVICE", if (provider == .xbox) "XBOX" else "GEFORCE NOW", selected == .service);
-    drawRow(renderer, 226, "ACCOUNT", "SIGN OUT", selected == .sign_out);
+    drawRow(renderer, 128, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
+    drawRow(renderer, 174, "TARGET FRAMERATE", fps_text, selected == .framerate);
+    drawRow(renderer, 220, "MAX BITRATE", bitrate_text, selected == .bitrate);
+    drawRow(renderer, 266, "STREAMING SERVICE", if (provider == .xbox) "XBOX" else "GEFORCE NOW", selected == .service);
+    drawRow(renderer, 312, "ACCOUNT", "SIGN OUT", selected == .sign_out);
 
     drawMappingExplanation(renderer, store.face_buttons);
-    font.text(renderer, 18, 340, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
+    font.text(renderer, 18, 366, 2, "FRAMERATE AND BITRATE APPLY ON NEXT STREAM", style.muted());
     const prompts = [_]controls.Prompt{
         controls.Prompt.one(controls.face(store.face_buttons, .a), "CHANGE"),
         controls.Prompt.one(.dpad, "MOVE"),
