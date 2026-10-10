@@ -334,10 +334,15 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
   ffmpeg_source="$BUILDS/ffmpeg-9.0"
   ffmpeg_request_patch="$DOWNLOADS/ffmpeg-9.0-v4l2-request.patch"
   ffmpeg_portable_patch="$ROOT/vendor/patches/ffmpeg-9.0-v4l2-request-portable.patch"
-  rm -rf "$ffmpeg_build" "$ffmpeg_source"
-  mkdir -p "$ffmpeg_build"
+  ffmpeg_patch_dir="$BUILDS/ffmpeg-9.0-patches"
+  rm -rf "$ffmpeg_build" "$ffmpeg_source" "$ffmpeg_patch_dir"
+  mkdir -p "$ffmpeg_build" "$ffmpeg_patch_dir"
   tar -xf "$DOWNLOADS/ffmpeg-9.0.tar.xz" -C "$BUILDS"
-  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_request_patch"
+  # Later mailbox patches depend on edits made by earlier patches.
+  git mailsplit -o"$ffmpeg_patch_dir" "$ffmpeg_request_patch"
+  for request_patch in "$ffmpeg_patch_dir"/*; do
+    patch -d "$ffmpeg_source" -p1 <"$request_patch"
+  done
   patch -d "$ffmpeg_source" -p1 <"$ffmpeg_portable_patch"
   find "$ffmpeg_source" -name '*.orig' -delete
   nm_tool=$(command -v llvm-nm || command -v nm)
