@@ -103,7 +103,7 @@ mkdir -p "$fixture/zig-out/bin" "$fixture/zig-out/lib" "$fixture/zig-out/rockchi
 for path in bin/webrtc_stream lib/libgreenovercast-cedar.so \
   rockchip/libgreenovercast-mpp.so rockchip/librockchip_mpp.so.1 \
   rockchip/greenovercast-mpp-probe.aarch64 bin/libavcodec.so.63 \
-  bin/libavutil.so.61 bin/libswscale.so.10; do
+  bin/libavutil.so.61 bin/libswscale.so.10 bin/libavformat.so.63 bin/libswresample.so.7; do
   cp "$TEST_ROOT/inline.so" "$fixture/zig-out/$path"
 done
 chmod +x "$fixture/zig-out/bin/webrtc_stream"

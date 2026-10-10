@@ -47,6 +47,8 @@ int go_handheld_ui_pick_provider(GoHandheldUi* ui);
 void go_handheld_ui_set_provider(GoHandheldUi* ui, GoHandheldUiProvider provider);
 int go_handheld_ui_wait(GoHandheldUi* ui, Uint32 milliseconds);
 int go_handheld_ui_cancel_requested(GoHandheldUi* ui);
+int go_handheld_ui_ad_action(GoHandheldUi* ui);
+void go_handheld_ui_draw_ad_hint(GoHandheldUi* ui, int modal);
 int go_handheld_ui_quit_requested(const GoHandheldUi* ui);
 int go_handheld_ui_sign_in_action(GoHandheldUi* ui);
 int go_handheld_ui_wait_for_retry(GoHandheldUi* ui, const char* heading, const char* detail);

@@ -4,6 +4,7 @@ const geforce_auth = @import("../provider/geforce_now/auth_client.zig");
 const geforce_catalog = @import("../provider/geforce_now/catalog_service.zig");
 const geforce_session = @import("../provider/geforce_now/session_client.zig");
 const geforce_webrtc = @import("../provider/geforce_now/webrtc_session.zig");
+const geforce_ads = @import("../provider/geforce_now/ad_playback.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -521,6 +522,9 @@ pub const Release = struct {
 
     pub fn waitReady(self: *Release) Result {
         if (self.provider == .geforce_now) {
+            var playback = geforce_ads.Playback{ .renderer = @ptrCast(c.go_sdl_platform_renderer(self.platform)), .device = c.go_sdl_platform_audio_device(self.platform), .ui = @ptrCast(self.ui()) };
+            self.geforce_cloud.?.ad_handler = .{ .context = &playback, .run = geforce_ads.Playback.handle };
+            defer self.geforce_cloud.?.ad_handler = null;
             self.geforce_cloud.?.waitUntilReady() catch |err| {
                 if (err == error.Cancelled) return .cancelled;
                 if (err == error.SessionEnded) return .session_ended;

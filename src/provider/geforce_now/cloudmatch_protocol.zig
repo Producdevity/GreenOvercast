@@ -1,5 +1,6 @@
 const std = @import("std");
 const endpoint = @import("endpoint.zig");
+const ad_protocol = @import("ad_protocol.zig");
 
 pub const IceServer = struct {
     urls: [][]u8,
@@ -24,6 +25,7 @@ pub const Session = struct {
     media_ip: ?[]u8,
     media_port: ?u16,
     ice_servers: []IceServer,
+    ads: ?ad_protocol.Admission = null,
 
     pub fn ready(self: *const Session) bool {
         return self.status == 2 or self.status == 3;
@@ -35,6 +37,7 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Session) void {
+        if (self.ads) |*ads| ads.deinit();
         self.allocator.free(self.id);
         if (self.signaling_url) |value| self.allocator.free(value);
         if (self.media_ip) |value| self.allocator.free(value);
@@ -371,6 +374,7 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
         .media_ip = media_ip,
         .media_port = media_port,
         .ice_servers = ice_servers,
+        .ads = try ad_protocol.parse(allocator, session),
     };
 }
 

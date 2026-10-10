@@ -203,6 +203,12 @@ fetch_source libdrm-2.4.128.tar.xz libdrm-2.4.128 \
 fetch_source SDL2-2.28.5.tar.gz SDL2-2.28.5 \
   https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz \
   332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4
+fetch_source zlib-1.3.2.tar.gz zlib-1.3.2 \
+  https://zlib.net/zlib-1.3.2.tar.gz \
+  bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+fetch_source expat-2.8.5.tar.xz expat-2.8.5 \
+  https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz \
+  1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182
 
 export ZIG_GLOBAL_CACHE_DIR="$TOOLS/cache/zig"
 export SOURCE_DATE_EPOCH=0
@@ -345,8 +351,31 @@ if [ ! -f "$BUILDS/.libdrm-2.4.128-v4l2-headers" ]; then
   : >"$BUILDS/.libdrm-2.4.128-v4l2-headers"
 fi
 
-if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
-  ffmpeg_build="$BUILDS/ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+if [ ! -f "$BUILDS/.zlib-1.3.2-static" ]; then
+  zlib_build="$BUILDS/zlib-1.3.2-static"
+  cmake -S "$SOURCES/zlib-1.3.2" -B "$zlib_build" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release \
+    -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
+  cmake --build "$zlib_build" --parallel
+  cmake --install "$zlib_build"
+  : >"$BUILDS/.zlib-1.3.2-static"
+fi
+
+if [ ! -f "$BUILDS/.expat-2.8.5-static" ]; then
+  expat_build="$BUILDS/expat-2.8.5-static"
+  cmake -S "$SOURCES/expat-2.8.5" -B "$expat_build" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_BUILD_TYPE=Release -DEXPAT_SHARED_LIBS=OFF -DEXPAT_DTD=OFF \
+    -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF
+  cmake --build "$expat_build" --parallel
+  cmake --install "$expat_build"
+  : >"$BUILDS/.expat-2.8.5-static"
+fi
+
+if [ ! -f "$BUILDS/.ffmpeg-9.0-mp4-vast-v4l2-request-shared" ]; then
+  ffmpeg_build="$BUILDS/ffmpeg-9.0-mp4-vast-v4l2-request-shared"
   ffmpeg_source="$BUILDS/ffmpeg-9.0"
   ffmpeg_request_patch="$DOWNLOADS/ffmpeg-9.0-v4l2-request.patch"
   ffmpeg_portable_patch="$ROOT/vendor/patches/ffmpeg-9.0-v4l2-request-portable.patch"
@@ -382,10 +411,17 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
       --disable-all \
       --enable-avcodec \
       --enable-avutil \
+      --enable-avformat \
+      --enable-swresample \
       --enable-swscale \
       --enable-decoder=h264 \
       --enable-decoder=mjpeg \
+      --enable-decoder=aac \
+      --enable-decoder=png \
       --enable-parser=h264 \
+      --enable-parser=aac \
+      --enable-demuxer=mov \
+      --enable-zlib \
       --enable-v4l2-request \
       --enable-libudev \
       --disable-libdrm \
@@ -397,12 +433,12 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
       --disable-doc \
       --disable-debug \
       --disable-stripping \
-      --extra-cflags="-O3 -I$PREFIX/include/libdrm -ffile-prefix-map=$ROOT=." \
+      --extra-cflags="-O3 -I$PREFIX/include -I$PREFIX/include/libdrm -ffile-prefix-map=$ROOT=." \
       --extra-ldflags="-L$PREFIX/lib"
     make -j4
     make install-libs install-headers
   )
-  : >"$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+  : >"$BUILDS/.ffmpeg-9.0-mp4-vast-v4l2-request-shared"
 fi
 
 if [ ! -f "$LIBDATACHANNEL_BUILD/.greenovercast-$LIBDATACHANNEL_COMMIT" ]; then

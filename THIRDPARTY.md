@@ -15,7 +15,9 @@ release. Full license texts for the bundled libraries ship alongside the port in
 | [CedarX](https://github.com/allwinner-zh/media-codec) (Allwinner H.264 decoder) | LGPLv2.1-or-later | Hardware H.264 decode (shared)                               |
 | [Linux Cedrus](https://www.kernel.org/) (7.0.11)                               | GPL-2.0-only      | ROCKNIX H700 V4L2 Request decoder modules                    |
 | [Rockchip MPP](https://github.com/rockchip-linux/mpp) (v1.1.0)                  | Apache-2.0/MIT    | Optional Rockchip H.264 decode (shared)                      |
-| [FFmpeg](https://ffmpeg.org/) (libavcodec, libavutil, libswscale)               | LGPLv2.1-or-later | H.264 decode, JPEG artwork, and color conversion             |
+| [FFmpeg](https://ffmpeg.org/)                                                | LGPLv2.1-or-later | Video/audio decode, MP4 ads, artwork, and color conversion   |
+| [Expat](https://libexpat.github.io/)                                         | MIT              | VAST XML parsing (static)                                   |
+| [zlib](https://zlib.net/)                                                    | Zlib             | PNG decompression (static into FFmpeg)                      |
 | [libudev-zero](https://github.com/illiliti/libudev-zero)                        | ISC               | V4L2 media-device discovery (static)                         |
 | [SDL2](https://www.libsdl.org/)                                                 | Zlib              | Window, renderer, audio, and controller input (device)       |
 | [OpenSSL](https://www.openssl.org/)                                             | Apache-2.0        | TLS, WebRTC DTLS, and credential encryption (static)         |

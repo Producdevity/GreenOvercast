@@ -52,6 +52,9 @@ launchers, press Select + Y to toggle mouse mode: D-pad or left stick moves the
 pointer, A clicks, B right-clicks, and L1 / R1 scroll. Store sign-in may still be
 required inside the stream.
 
+GeForce NOW Free sessions may show ads before the game. Start opens ad information
+when an icon is shown; B returns to the ad or cancels playback.
+
 ## Supported devices
 
 | Device     | SoC             | OS                            | Status |
@@ -81,9 +84,9 @@ You need a Linux or macOS host with CMake 3.24+, `curl`, `git`, `make`, `patch`,
 Build validation also needs `llvm-readelf` or GNU `readelf` (`binutils` on
 Debian/Ubuntu, or `llvm` with its `bin` directory on `PATH` on macOS).
 
-Host tests also need SDL2 and curl development files: install
-`libsdl2-dev libcurl4-openssl-dev pkg-config` on Debian/Ubuntu or
-`sdl2 curl pkg-config` with Homebrew.
+Host tests also need SDL2, curl and Expat development files: install
+`libsdl2-dev libcurl4-openssl-dev libexpat1-dev pkg-config` on Debian/Ubuntu or
+`sdl2 curl expat pkg-config` with Homebrew.
 
 ```sh
 tools/bootstrap.sh

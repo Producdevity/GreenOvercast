@@ -3,6 +3,12 @@ const auth_client = @import("auth_client.zig");
 const protocol = @import("cloudmatch_protocol.zig");
 const subscription = @import("subscription_protocol.zig");
 const uuid = @import("uuid");
+const ads = @import("ad_protocol.zig");
+
+pub const AdHandler = struct {
+    context: *anyopaque,
+    run: *const fn (*anyopaque, *Client, ads.Opportunity, u8) anyerror!void,
+};
 
 const c = @cImport({
     @cInclude("handheld_ui.h");
@@ -34,6 +40,10 @@ pub const Client = struct {
     stream_width: u16 = fallback_stream_width,
     stream_height: u16 = fallback_stream_height,
     stream_frames_per_second: u16 = preferred_frames_per_second,
+    ad_handler: ?AdHandler = null,
+    ad_stop: ?*std.atomic.Value(bool) = null,
+    completed_ads: std.ArrayListUnmanaged([]u8) = .{},
+    app_id: ?[]u8 = null,
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -52,6 +62,8 @@ pub const Client = struct {
     }
 
     pub fn destroy(self: *Client) void {
+        if (self.app_id) |id| self.allocator.free(id);
+        self.clearAds();
         if (self.session) |*session| session.deinit();
         if (self.streaming_url) |url| self.allocator.free(url);
         const allocator = self.allocator;
@@ -66,7 +78,11 @@ pub const Client = struct {
         height: u16,
     ) !void {
         if (self.session != null) return error.SessionAlreadyActive;
+        self.clearAds();
         uuid.generate(&self.client_id);
+        if (self.app_id) |id| self.allocator.free(id);
+        self.app_id = null;
+        self.app_id = try self.allocator.dupe(u8, app_id);
         const bearer = self.auth.bearer() orelse return error.MissingCredentials;
         const provider_url = self.auth.streamingUrl() orelse return error.MissingProvider;
         const user_age = try self.auth.fetchUserAge();
@@ -121,7 +137,23 @@ pub const Client = struct {
         while (true) {
             const current = if (self.session) |*session| session else return error.MissingSession;
             if (current.ended()) return error.SessionEnded;
-            if (current.ready() and current.signaling_url != null) return;
+            if (current.ads) |admission| {
+                if (admission.required) for (admission.opportunities) |opportunity| {
+                    var handled = false;
+                    for (self.completed_ads.items) |id| if (std.mem.eql(u8, id, opportunity.id)) {
+                        handled = true;
+                        break;
+                    };
+                    if (handled) continue;
+                    if (self.completed_ads.items.len == 64) return error.TooManyAdOpportunities;
+                    const handler = self.ad_handler orelse return error.AdPlayerUnavailable;
+                    const id = try self.allocator.dupe(u8, opportunity.id);
+                    errdefer self.allocator.free(id);
+                    try handler.run(handler.context, self, opportunity, admission.provider);
+                    try self.completed_ads.append(self.allocator, id);
+                };
+                if (current.ready() and current.signaling_url != null and !admission.required) return;
+            } else if (current.ready() and current.signaling_url != null) return;
             self.drawProgress(current);
             if (c.go_handheld_ui_wait(self.ui, pollDelay(consecutive_server_errors)) != 0)
                 return error.Cancelled;
@@ -170,6 +202,32 @@ pub const Client = struct {
         c.go_http_response_destroy(response);
     }
 
+    fn clearAds(self: *Client) void {
+        for (self.completed_ads.items) |id| self.allocator.free(id);
+        self.completed_ads.deinit(self.allocator);
+        self.completed_ads = .{};
+    }
+
+    pub fn reportAd(self: *Client, id: []const u8, update: ads.Update) !void {
+        const session = self.session orelse return error.MissingSession;
+        const admission = session.ads orelse return error.MissingAdMetadata;
+        const base = admission.control_base orelse self.streaming_url orelse return error.MissingProvider;
+        const bearer = self.auth.bearer() orelse return error.MissingCredentials;
+        const body = try ads.buildUpdate(self.allocator, id, update, std.time.timestamp());
+        defer self.allocator.free(body);
+        var buffer: [1024]u8 = undefined;
+        const url = try std.fmt.bufPrintZ(&buffer, "{s}v2/session/{s}", .{ base, session.id });
+        const response = try self.request("PUT", url, body, bearer);
+        defer c.go_http_response_destroy(response);
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response.*.data[0..response.*.len], .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return error.AdUpdateRejected;
+        const status = parsed.value.object.get("requestStatus") orelse return error.AdUpdateRejected;
+        if (status != .object) return error.AdUpdateRejected;
+        const code = status.object.get("statusCode") orelse return error.AdUpdateRejected;
+        if (code != .integer or code.integer != 1) return error.AdUpdateRejected;
+    }
+
     pub fn sessionInfo(self: *Client) ?*const protocol.Session {
         return if (self.session) |*session| session else null;
     }
@@ -204,7 +262,7 @@ pub const Client = struct {
         var dynamic_headers: [2][256]u8 = undefined;
         var headers = [_][*c]const u8{
             authorization.ptr,
-            try header(&dynamic_headers[0], "nv-client-id", null, self.clientId()),
+            try header(&dynamic_headers[0], "nv-client-id", null, self.auth.protocolClientId()),
             try header(&dynamic_headers[1], "x-device-id", null, self.auth.stableDeviceId()),
             "Accept: application/json",
             "Content-Type: application/json",
@@ -471,7 +529,7 @@ pub const Client = struct {
         var dynamic_headers: [2][256]u8 = undefined;
         var headers = [_][*c]const u8{
             authorization.ptr,
-            try header(&dynamic_headers[0], "nv-client-id", null, self.clientId()),
+            try header(&dynamic_headers[0], "nv-client-id", null, self.auth.protocolClientId()),
             try header(&dynamic_headers[1], "x-device-id", null, self.auth.stableDeviceId()),
             "Accept: application/json",
             "nv-client-streamer: NVIDIA-CLASSIC",
@@ -524,6 +582,7 @@ pub const Client = struct {
 
 fn requestCancelled(context: ?*anyopaque) callconv(.c) c_int {
     const client: *Client = @ptrCast(@alignCast(context orelse return 1));
+    if (client.ad_stop) |stop| return @intFromBool(stop.load(.acquire));
     return c.go_handheld_ui_cancel_requested(client.ui);
 }
 
@@ -729,4 +788,53 @@ test "membership and region discovery requests preserve cancellation" {
     ));
     try std.testing.expectEqual(@as(usize, 1), http.requests);
     try std.testing.expectEqual(@as(usize, 1), http.polls);
+}
+
+test "ready sessions still require ad admission and repeated pod IDs play only once" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    const Handler = struct {
+        calls: usize = 0,
+        fn run(pointer: *anyopaque, client: *Client, opportunity: ads.Opportunity, provider: u8) !void {
+            const self: *@This() = @ptrCast(@alignCast(pointer));
+            self.calls += 1;
+            try std.testing.expectEqualStrings("pod", opportunity.id);
+            try std.testing.expectEqual(@as(u8, 1), provider);
+            http.replyJson("{\"requestStatus\":{\"statusCode\":1}}");
+            try client.reportAd(opportunity.id, .{ .action = .cancel, .reason = "VAST_EMPTY_RESPONSE" });
+            http.replyJson(
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionAdsRequired":false,"sessionControlInfo":{"ip":"np.example.nvidiagrid.net","port":443}}}
+            );
+        }
+    };
+    var handler = Handler{};
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{ .allocator = std.testing.allocator, .auth = &auth, .ui = @ptrCast(auth.ui), .client_id = [_]u8{0} ** 37, .streaming_url = @constCast("https://np.example.nvidiagrid.net/"), .ad_handler = .{ .context = &handler, .run = Handler.run }, .session = try protocol.parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionAdsRequired":true,"adProvider":1,"sessionControlInfo":{"ip":"np.example.nvidiagrid.net","port":443},"sessionAds":[{"adId":"pod","adUrl":"https://example.invalid/tag"},{"adId":"pod","adUrl":"https://example.invalid/tag"}]}}
+    ) };
+    defer client.session.?.deinit();
+    defer client.clearAds();
+    try client.waitUntilReady();
+    try std.testing.expectEqual(@as(usize, 1), handler.calls);
+    try std.testing.expectEqual(@as(usize, 2), http.requests);
+    try std.testing.expect(!client.session.?.ads.?.required);
+}
+
+test "ad reports require a positive CloudMatch acknowledgement" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{ .allocator = std.testing.allocator, .auth = &auth, .ui = @ptrCast(auth.ui), .client_id = [_]u8{0} ** 37, .streaming_url = @constCast("https://np.example.nvidiagrid.net/"), .session = try protocol.parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":1}}
+    ) };
+    defer client.session.?.deinit();
+    const update = ads.Update{ .action = .finish, .watched_ms = 5000, .duration_ms = 5000 };
+    for ([_][]const u8{ "{}", "{\"requestStatus\":{\"statusCode\":2}}", "{\"requestStatus\":{\"statusCode\":null}}" }) |body| {
+        http.replyJson(body);
+        try std.testing.expectError(error.AdUpdateRejected, client.reportAd("pod", update));
+    }
+    http.replyJson("{\"requestStatus\":{\"statusCode\":1}}");
+    try client.reportAd("pod", update);
 }

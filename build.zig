@@ -140,11 +140,14 @@ fn addZigImport(
     name: []const u8,
     source: []const u8,
 ) void {
-    module.addImport(name, b.createModule(.{
+    const imported = b.createModule(.{
         .root_source_file = b.path(source),
         .target = target,
         .optimize = optimize,
-    }));
+    });
+    if (std.mem.eql(u8, name, "xml_document") or std.mem.eql(u8, name, "clip_player"))
+        imported.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    module.addImport(name, imported);
 }
 
 fn addStaticArchive(module: *std.Build.Module, b: *std.Build, path: []const u8) void {
@@ -167,6 +170,16 @@ fn addHostUnitTest(
     });
     if (project_includes) addProjectIncludes(b, module);
     if (sdl) module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .force });
+    if (std.mem.endsWith(u8, source, "/vast.zig") or std.mem.endsWith(u8, source, "/ad_policy.zig") or
+        std.mem.endsWith(u8, source, "/ad_network.zig"))
+        addZigImport(b, module, b.graph.host, .Debug, "xml_document", "src/net/xml_document.zig");
+    if (std.mem.endsWith(u8, source, "/vast.zig") or std.mem.endsWith(u8, source, "/xml_document.zig") or
+        std.mem.endsWith(u8, source, "/ad_policy.zig") or std.mem.endsWith(u8, source, "/ad_network.zig"))
+        module.linkSystemLibrary("expat", .{ .use_pkg_config = .force });
+    if (std.mem.endsWith(u8, source, "/ad_network.zig")) {
+        module.addCSourceFile(.{ .file = b.path("src/net/http_client.c"), .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror" } });
+        module.linkSystemLibrary("curl", .{ .use_pkg_config = .force });
+    }
     for (imports) |item|
         addZigImport(b, module, b.graph.host, .Debug, item.name, item.path);
     const unit_tests = b.addTest(.{ .root_module = module });
@@ -194,6 +207,8 @@ fn addReleaseArtifacts(
     });
     addProjectIncludes(b, main_module);
     main_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    addZigImport(b, main_module, target, optimize, "xml_document", "src/net/xml_document.zig");
+    addZigImport(b, main_module, target, optimize, "clip_player", "src/media/clip/player.zig");
     addZigImport(
         b,
         main_module,
@@ -240,7 +255,8 @@ fn addReleaseArtifacts(
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libssl.a");
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libcrypto.a");
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libopus.a");
-    for ([_][]const u8{ "pthread", "dl", "SDL2", "avcodec", "avutil", "swscale" }) |library| {
+    addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libexpat.a");
+    for ([_][]const u8{ "pthread", "dl", "SDL2", "avcodec", "avutil", "swscale", "avformat", "swresample" }) |library| {
         main_module.linkSystemLibrary(library, .{ .use_pkg_config = .no });
     }
 
@@ -383,6 +399,8 @@ fn addReleaseArtifacts(
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavcodec.so.63", .name = "libavcodec.so.63" },
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavutil.so.61", .name = "libavutil.so.61" },
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libswscale.so.10", .name = "libswscale.so.10" },
+        .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavformat.so.63", .name = "libavformat.so.63" },
+        .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libswresample.so.7", .name = "libswresample.so.7" },
     };
     var private_library_installs: [private_libraries.len]*std.Build.Step.InstallFile = undefined;
     for (private_libraries, 0..) |library, index| {
@@ -407,6 +425,8 @@ fn addReleaseArtifacts(
         b.getInstallPath(.bin, "libavcodec.so.63"),
         b.getInstallPath(.bin, "libavutil.so.61"),
         b.getInstallPath(.bin, "libswscale.so.10"),
+        b.getInstallPath(.bin, "libavformat.so.63"),
+        b.getInstallPath(.bin, "libswresample.so.7"),
     });
     runtime_check.setCwd(b.path("."));
     runtime_check.step.dependOn(&install_executable.step);
@@ -476,6 +496,39 @@ pub fn build(b: *std.Build) void {
     const aarch64_linux = b.resolveTargetQuery(aarch64_linux_query);
     const release = addReleaseArtifacts(b, aarch64_linux, .ReleaseSafe);
     b.default_step.dependOn(release);
+
+    const ad_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/device/ad_playback_test.zig"),
+        .target = aarch64_linux,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    addProjectIncludes(b, ad_test_module);
+    ad_test_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    ad_test_module.addLibraryPath(b.path(".tools/deps/aarch64-linux-gnu/lib"));
+    const ads_module = b.createModule(.{
+        .root_source_file = b.path("src/provider/geforce_now/ad_playback.zig"),
+        .target = aarch64_linux,
+        .optimize = .ReleaseSafe,
+    });
+    addProjectIncludes(b, ads_module);
+    ads_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    for ([_]ZigImport{
+        .{ .name = "xml_document", .path = "src/net/xml_document.zig" },
+        .{ .name = "clip_player", .path = "src/media/clip/player.zig" },
+        .{ .name = "uuid", .path = "src/util/uuid.zig" },
+    }) |item| addZigImport(b, ads_module, aarch64_linux, .ReleaseSafe, item.name, item.path);
+    ad_test_module.addImport("gfn_ads", ads_module);
+    ad_test_module.addCSourceFiles(.{ .files = &.{ "src/ui/artwork_decoder.c", "src/net/http_client.c" }, .flags = aarch64_c_test_flags });
+    for ([_][]const u8{ "avcodec", "avformat", "avutil", "swresample", "swscale", "SDL2", "pthread" }) |library|
+        ad_test_module.linkSystemLibrary(library, .{ .use_pkg_config = .no });
+    for ([_][]const u8{ "expat", "curl", "ssl", "crypto" }) |library|
+        addStaticArchive(ad_test_module, b, b.fmt(".tools/deps/aarch64-linux-gnu/lib/lib{s}.a", .{library}));
+    ad_test_module.addRPathSpecial("$ORIGIN");
+    const ad_test = b.addExecutable(.{ .name = "greenovercast-ad-test.aarch64", .root_module = ad_test_module });
+    ad_test.step.dependOn(release);
+    const ad_test_step = b.step("ad-player-test", "Build the offline aarch64 ad playback test");
+    ad_test_step.dependOn(&b.addInstallArtifact(ad_test, .{}).step);
 
     const product_check = b.step("product-check", "Build the complete aarch64 product");
     product_check.dependOn(release);
@@ -565,6 +618,11 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/provider/geforce_now/pointer_input.zig" },
         .{ .source = "src/provider/geforce_now/endpoint.zig" },
         .{ .source = "src/provider/geforce_now/cloudmatch_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/ad_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/ad_policy.zig", .project_includes = true },
+        .{ .source = "src/provider/geforce_now/ad_network.zig", .project_includes = true },
+        .{ .source = "src/net/xml_document.zig", .project_includes = true },
+        .{ .source = "src/provider/geforce_now/vast.zig", .project_includes = true },
         .{ .source = "src/provider/geforce_now/subscription_protocol.zig" },
         .{ .source = "src/provider/geforce_now/provider_protocol.zig" },
         .{ .source = "src/provider/geforce_now/signaling_protocol.zig" },

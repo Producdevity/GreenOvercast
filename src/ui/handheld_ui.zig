@@ -683,6 +683,44 @@ pub export fn go_handheld_ui_cancel_requested(ui: ?*Ui) c_int {
     return @intFromBool(cancelRequested(ui orelse return 1));
 }
 
+pub export fn go_handheld_ui_ad_action(ui: ?*Ui) c_int {
+    const handle = ui orelse return -1;
+    if (shouldStop(handle)) return -1;
+    var result: c_int = 0;
+    var event: c.SDL_Event = undefined;
+    while (c.SDL_PollEvent(&event) != 0) {
+        c.go_controller_input_handle_event(handle.controller, &event);
+        if (event.type == c.SDL_QUIT) {
+            handle.quit_requested = true;
+            return -1;
+        }
+        if (event.type == c.SDL_KEYDOWN) {
+            if (event.key.keysym.sym == c.SDLK_ESCAPE) return 2;
+            if (event.key.keysym.sym == c.SDLK_RETURN) result = 1;
+            if (event.key.keysym.sym == c.SDLK_LEFT) result = 3;
+            if (event.key.keysym.sym == c.SDLK_RIGHT) result = 4;
+        }
+        if (event.type != c.SDL_CONTROLLERBUTTONDOWN or !activeControllerEvent(handle, &event)) continue;
+        switch (semanticButton(handle, event.cbutton.button)) {
+            c.SDL_CONTROLLER_BUTTON_B => return 2,
+            c.SDL_CONTROLLER_BUTTON_START => result = 1,
+            c.SDL_CONTROLLER_BUTTON_DPAD_LEFT => result = 3,
+            c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT => result = 4,
+            else => {},
+        }
+    }
+    return result;
+}
+
+pub export fn go_handheld_ui_draw_ad_hint(ui: ?*Ui, modal: c_int) void {
+    const handle = ui orelse return;
+    const prompts = [_]controls.Prompt{if (modal != 0)
+        controls.Prompt.one(controls.face(handle.settings.face_buttons, .b), "BACK TO AD")
+    else
+        controls.Prompt.one(.start, "AD INFO")};
+    controls.drawCenteredRow(handle.renderer, 439, &prompts, style.bright());
+}
+
 pub export fn go_handheld_ui_quit_requested(ui: ?*const Ui) c_int {
     const handle = ui orelse return 1;
     return @intFromBool(handle.quit_requested or shouldStop(handle));
