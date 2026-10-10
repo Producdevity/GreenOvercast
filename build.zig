@@ -624,6 +624,19 @@ pub fn build(b: *std.Build) void {
             test_config.imports,
         );
 
+    const http_test = b.addTest(.{
+        .root_source_file = b.path("tests/http_client_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    http_test.addIncludePath(b.path("src/net"));
+    http_test.addCSourceFile(.{ .file = b.path("src/net/http_client.c"), .flags = c_test_flags });
+    http_test.linkLibC();
+    http_test.linkSystemLibrary("curl");
+    const run_http_test = b.addRunArtifact(http_test);
+    run_http_test.setEnvironmentVariable("NO_PROXY", "127.0.0.1,localhost");
+    test_step.dependOn(&run_http_test.step);
+
     const video_decoder_object =
         addHostZigObject(b, "video-decoder", "src/media/video/video_decoder.zig");
     const video_frame_copy_object =

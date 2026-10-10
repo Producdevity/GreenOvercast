@@ -81,8 +81,9 @@ You need a Linux or macOS host with CMake 3.24+, `curl`, `git`, `make`, `patch`,
 Build validation also needs `llvm-readelf` or GNU `readelf` (`binutils` on
 Debian/Ubuntu, or `llvm` with its `bin` directory on `PATH` on macOS).
 
-Host tests also need SDL2 development files: install
-`libsdl2-dev pkg-config` on Debian/Ubuntu or `sdl2 pkg-config` with Homebrew.
+Host tests also need SDL2 and curl development files: install
+`libsdl2-dev libcurl4-openssl-dev pkg-config` on Debian/Ubuntu or
+`sdl2 curl pkg-config` with Homebrew.
 
 ```sh
 tools/bootstrap.sh

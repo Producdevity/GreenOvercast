@@ -129,14 +129,9 @@ GoHttpResponse* go_http_request_bounded_cancelable(const char* method, const cha
     }
 
     curl_easy_setopt(request, CURLOPT_URL, url);
-    if (strcmp(method, "POST") == 0) {
-        curl_easy_setopt(request, CURLOPT_POST, 1L);
+    curl_easy_setopt(request, CURLOPT_CUSTOMREQUEST, method);
+    if (body || strcmp(method, "POST") == 0)
         curl_easy_setopt(request, CURLOPT_POSTFIELDS, body ? body : "");
-    } else if (strcmp(method, "DELETE") == 0) {
-        curl_easy_setopt(request, CURLOPT_CUSTOMREQUEST, "DELETE");
-    } else if (strcmp(method, "GET") != 0) {
-        curl_easy_setopt(request, CURLOPT_CUSTOMREQUEST, method);
-    }
     if (request_headers)
         curl_easy_setopt(request, CURLOPT_HTTPHEADER, request_headers);
     ResponseWriter writer = {.response = response, .limit = response_limit};
