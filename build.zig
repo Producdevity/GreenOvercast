@@ -3,12 +3,15 @@ const std = @import("std");
 // glibc 2.38 is the oldest userspace supported by the packaged release.
 const aarch64_linux_query: std.Target.Query = .{
     .cpu_arch = .aarch64,
+    // Keep baseline ARM64 atomics independent of firmware runtime helpers.
+    .cpu_features_sub = std.Target.aarch64.featureSet(&.{.outline_atomics}),
     .os_tag = .linux,
     .abi = .gnu,
     .glibc_version = .{ .major = 2, .minor = 38, .patch = 0 },
 };
 
 const c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
+const aarch64_c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-mno-outline-atomics" };
 
 const project_include_paths = [_][]const u8{
     "vendor/libdatachannel/include",
@@ -219,7 +222,7 @@ fn addReleaseArtifacts(
     main_module.addRPathSpecial("$ORIGIN");
     main_module.addCSourceFiles(.{
         .files = &release_c_sources,
-        .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror" },
+        .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-mno-outline-atomics" },
     });
 
     for (release_zig_roots) |root| {
@@ -266,6 +269,7 @@ fn addReleaseArtifacts(
         .files = &cedar_sources,
         .flags = &.{
             "-std=gnu11",
+            "-mno-outline-atomics",
             "-D_GNU_SOURCE",
             "-includestdint.h",
             "-fvisibility=hidden",
@@ -293,7 +297,7 @@ fn addReleaseArtifacts(
     cedar_test_module.addIncludePath(b.path("src/media/video"));
     cedar_test_module.addCSourceFile(.{
         .file = b.path("tests/device/cedar_bridge_test.c"),
-        .flags = c_test_flags,
+        .flags = aarch64_c_test_flags,
     });
     cedar_test_module.linkLibrary(cedar);
     cedar_test_module.addRPathSpecial("$ORIGIN");
@@ -316,7 +320,7 @@ fn addReleaseArtifacts(
     mpp_module.addRPathSpecial("$ORIGIN");
     mpp_module.addCSourceFile(.{
         .file = b.path("src/media/video/mpp_bridge.c"),
-        .flags = c_test_flags,
+        .flags = aarch64_c_test_flags,
     });
     mpp_module.linkSystemLibrary("rockchip_mpp", .{
         .use_pkg_config = .no,
@@ -365,7 +369,7 @@ fn addReleaseArtifacts(
         });
         module.addIncludePath(b.path("src/media/video"));
         module.addRPathSpecial("$ORIGIN");
-        module.addCSourceFile(.{ .file = b.path(item.source), .flags = c_test_flags });
+        module.addCSourceFile(.{ .file = b.path(item.source), .flags = aarch64_c_test_flags });
         module.addObject(mpp_loader_device_object);
         module.linkSystemLibrary("dl", .{ .use_pkg_config = .no });
         const tool = b.addExecutable(.{ .name = item.name, .root_module = module });
@@ -390,14 +394,31 @@ fn addReleaseArtifacts(
         private_library_installs[index] = b.addInstallBinFile(copy.getOutput(), library.name);
     }
 
+    const runtime_check = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/check-aarch64-runtime.sh"),
+        b.getInstallPath(.bin, "webrtc_stream"),
+        b.getInstallPath(.lib, "libgreenovercast-cedar.so"),
+        b.getInstallPath(.bin, "cedar_bridge_test"),
+        b.getInstallPath(.prefix, "rockchip/libgreenovercast-mpp.so"),
+        b.getInstallPath(.prefix, "rockchip/librockchip_mpp.so.1"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-probe.aarch64"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-bridge-test.aarch64"),
+        b.getInstallPath(.bin, "libavcodec.so.63"),
+        b.getInstallPath(.bin, "libavutil.so.61"),
+        b.getInstallPath(.bin, "libswscale.so.10"),
+    });
+    runtime_check.setCwd(b.path("."));
+    runtime_check.step.dependOn(&install_executable.step);
+    runtime_check.step.dependOn(&install_cedar.step);
+    runtime_check.step.dependOn(&install_cedar_test.step);
+    runtime_check.step.dependOn(&install_mpp.step);
+    runtime_check.step.dependOn(&install_mpp_runtime.step);
+    for (mpp_device_installs) |install| runtime_check.step.dependOn(&install.step);
+    for (private_library_installs) |install| runtime_check.step.dependOn(&install.step);
+
     const release = b.step("release", "Build the aarch64 application and decoder plugins");
-    release.dependOn(&install_executable.step);
-    release.dependOn(&install_cedar.step);
-    release.dependOn(&install_cedar_test.step);
-    release.dependOn(&install_mpp.step);
-    release.dependOn(&install_mpp_runtime.step);
-    for (mpp_device_installs) |install| release.dependOn(&install.step);
-    for (private_library_installs) |install| release.dependOn(&install.step);
+    release.dependOn(&runtime_check.step);
     return release;
 }
 
@@ -484,7 +505,7 @@ pub fn build(b: *std.Build) void {
     smoke.root_module.addImport("stat_compat", stat_compat);
     smoke.addCSourceFile(.{
         .file = b.path("src/smoke/cpp_probe.cpp"),
-        .flags = &.{"-std=c++17"},
+        .flags = &.{ "-std=c++17", "-mno-outline-atomics" },
     });
     smoke.linkLibCpp();
 
@@ -511,6 +532,12 @@ pub fn build(b: *std.Build) void {
     });
     dependency_toolchain_test.setCwd(b.path("."));
     test_step.dependOn(&dependency_toolchain_test.step);
+    const aarch64_runtime_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/aarch64_runtime_test.sh"),
+    });
+    aarch64_runtime_test.setCwd(b.path("."));
+    test_step.dependOn(&aarch64_runtime_test.step);
 
     const tests = [_]struct {
         source: []const u8,
