@@ -10,6 +10,7 @@
 #include "../util/log.h"
 
 #define DEFAULT_RESPONSE_LIMIT (16 * 1024 * 1024)
+#define DEFAULT_TIMEOUT_SECONDS 30L
 
 typedef struct {
     GoHttpResponse* response;
@@ -90,12 +91,12 @@ int go_http_response_succeeded(const GoHttpResponse* response) {
     return response && response->status >= 200 && response->status < 300;
 }
 
-GoHttpResponse* go_http_request_bounded_cancelable(
+static GoHttpResponse* http_request(
     const char* method, const char* url, const char* body, const char** headers,
-    int header_count, size_t response_limit, GoHttpCancelRequested cancel_requested,
-    void* cancel_context) {
+    int header_count, size_t response_limit, long timeout_seconds,
+    GoHttpCancelRequested cancel_requested, void* cancel_context) {
     if (!method || !url || response_limit == 0 || header_count < 0 ||
-        (header_count > 0 && !headers))
+        (header_count > 0 && !headers) || timeout_seconds <= 0)
         return NULL;
 
     CURL* request = curl_easy_init();
@@ -133,7 +134,7 @@ GoHttpResponse* go_http_request_bounded_cancelable(
     ResponseWriter writer = {.response = response, .limit = response_limit};
     curl_easy_setopt(request, CURLOPT_WRITEFUNCTION, append_response);
     curl_easy_setopt(request, CURLOPT_WRITEDATA, &writer);
-    curl_easy_setopt(request, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(request, CURLOPT_TIMEOUT, timeout_seconds);
     curl_easy_setopt(request, CURLOPT_NOSIGNAL, 1L);
     const char* ca_bundle = find_ca_bundle();
     if (ca_bundle)
@@ -161,6 +162,14 @@ GoHttpResponse* go_http_request_bounded_cancelable(
     return response;
 }
 
+GoHttpResponse* go_http_request_bounded_cancelable(
+    const char* method, const char* url, const char* body, const char** headers,
+    int header_count, size_t response_limit, GoHttpCancelRequested cancel_requested,
+    void* cancel_context) {
+    return http_request(method, url, body, headers, header_count, response_limit,
+                        DEFAULT_TIMEOUT_SECONDS, cancel_requested, cancel_context);
+}
+
 GoHttpResponse* go_http_request_bounded(const char* method, const char* url, const char* body,
                                         const char** headers, int header_count,
                                         size_t response_limit) {
@@ -172,4 +181,11 @@ GoHttpResponse* go_http_request(const char* method, const char* url, const char*
                                 const char** headers, int header_count) {
     return go_http_request_bounded(method, url, body, headers, header_count,
                                    DEFAULT_RESPONSE_LIMIT);
+}
+
+GoHttpResponse* go_http_request_with_timeout(const char* method, const char* url, const char* body,
+                                             const char** headers, int header_count,
+                                             long timeout_seconds) {
+    return http_request(method, url, body, headers, header_count, DEFAULT_RESPONSE_LIMIT,
+                        timeout_seconds, NULL, NULL);
 }

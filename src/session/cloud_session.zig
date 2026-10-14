@@ -25,9 +25,16 @@ const Stats = extern struct {
     keepalive_failures: c_int,
 };
 
+// "cloud" is xCloud Game Pass streaming (fixed host, titleId); "home" is
+// console streaming to the user's own Xbox (xHome: host discovered at login,
+// serverId). Everything after play (state/connect/sdp/ice/keepalive/delete)
+// is the same session-path protocol for both, so one Session type serves both.
+const Offering = enum(c_int) { cloud = 0, home = 1 };
+
 const Session = struct {
     auth: *c.GoXboxAuth,
     ui: *c.GoHandheldUi,
+    offering: Offering = .cloud,
     session_path: [256]u8 = [_]u8{0} ** 256,
     keepalive_thread: ?std.Thread = null,
     keepalive_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -44,6 +51,13 @@ fn cString(pointer: [*c]const u8) ?[]const u8 {
 
 fn bufferString(buffer: []const u8) []const u8 {
     return buffer[0 .. std.mem.indexOfScalar(u8, buffer, 0) orelse buffer.len];
+}
+
+fn baseUrl(session: *const Session) ?[]const u8 {
+    return switch (session.offering) {
+        .cloud => base_url,
+        .home => cString(c.go_xbox_auth_home_base_url(session.auth)),
+    };
 }
 
 fn responseData(response: [*c]c.GoHttpResponse) ?[]const u8 {
@@ -70,7 +84,10 @@ fn request(
 ) [*c]c.GoHttpResponse {
     if (method == null or url == null or extra_header_count < 0 or extra_header_count > 4)
         return null;
-    const token = cString(c.go_xbox_auth_gssv_token(session.auth)) orelse return null;
+    const token = cString(switch (session.offering) {
+        .cloud => c.go_xbox_auth_gssv_token(session.auth),
+        .home => c.go_xbox_auth_home_gssv_token(session.auth),
+    }) orelse return null;
     var auth_header_buffer: [16384]u8 = undefined;
     const auth_header = std.fmt.bufPrintZ(
         &auth_header_buffer,
@@ -107,8 +124,17 @@ fn request(
 fn startGame(session: *Session, title_id: []const u8) !void {
     if (title_id.len == 0) return error.InvalidTitle;
     if (bufferString(&session.session_path).len != 0) return error.ActiveSession;
+    const host = baseUrl(session) orelse return error.MissingBaseUrl;
     var url_buffer: [512]u8 = undefined;
-    const url = try std.fmt.bufPrintZ(&url_buffer, "{s}/v5/sessions/cloud/play", .{base_url});
+    const url = try std.fmt.bufPrintZ(
+        &url_buffer,
+        "{s}/v5/sessions/{s}/play",
+        .{ host, if (session.offering == .home) "home" else "cloud" },
+    );
+    // For cloud the id names a title; for home it names the console
+    // (serverId) and titleId stays empty - same body shape either way.
+    const title_value = if (session.offering == .cloud) title_id else "";
+    const server_value = if (session.offering == .home) title_id else "";
     var body_buffer: [4096]u8 = undefined;
     const body = try std.fmt.bufPrintZ(
         &body_buffer,
@@ -117,8 +143,8 @@ fn startGame(session: *Session, title_id: []const u8) !void {
             "\"enableOptionalDataCollection\":false,\"enableTextToSpeech\":false," ++
             "\"highContrast\":0,\"locale\":\"en-US\",\"useIceConnection\":false," ++
             "\"timezoneOffsetMinutes\":120,\"sdkType\":\"web\",\"osName\":\"android\"}}," ++
-            "\"serverId\":\"\",\"fallbackRegionNames\":[]}}",
-        .{title_id},
+            "\"serverId\":\"{s}\",\"fallbackRegionNames\":[]}}",
+        .{ title_value, server_value },
     );
     var headers = [_][*c]const u8{"Content-Type: application/json"};
     const response = request(session, "POST", url.ptr, body.ptr, @ptrCast(&headers), headers.len);
@@ -130,19 +156,29 @@ fn startGame(session: *Session, title_id: []const u8) !void {
 }
 
 fn waitForState(session: *Session, target: []const u8, max_polls: usize) !void {
-    if (bufferString(&session.session_path).len == 0 or target.len == 0 or max_polls == 0)
+    _ = try waitForAnyState(session, &.{target}, max_polls);
+}
+
+// Polls the session state until it equals one of `targets` and returns that
+// target's index. Cloud sessions always pass a single target (ReadyToConnect,
+// then Provisioned after connect); xHome sessions on an awake console usually
+// go straight to Provisioned without ever needing the connect step, so the
+// caller lists both and acts on which one it got.
+fn waitForAnyState(session: *Session, targets: []const []const u8, max_polls: usize) !usize {
+    if (bufferString(&session.session_path).len == 0 or targets.len == 0 or max_polls == 0)
         return error.InvalidStateRequest;
-    var target_buffer: [64]u8 = [_]u8{0} ** 64;
-    if (target.len >= target_buffer.len) return error.InvalidStateRequest;
-    @memcpy(target_buffer[0..target.len], target);
+    for (targets) |target| {
+        if (target.len == 0 or target.len >= 64) return error.InvalidStateRequest;
+    }
 
     var poll: usize = 0;
     while (poll < max_polls) : (poll += 1) {
+        const host = baseUrl(session) orelse return error.MissingBaseUrl;
         var url_buffer: [512]u8 = undefined;
         const url = try std.fmt.bufPrintZ(
             &url_buffer,
             "{s}/{s}/state",
-            .{ base_url, bufferString(&session.session_path) },
+            .{ host, bufferString(&session.session_path) },
         );
         const response = request(session, "GET", url.ptr, null, null, 0);
         if (c.go_http_response_succeeded(response) == 0) {
@@ -157,9 +193,13 @@ fn waitForState(session: *Session, target: []const u8, max_polls: usize) !void {
         const state = if (data) |payload| jsonString(payload, "state", &state_buffer) catch null else null;
         const details = if (data) |payload| jsonString(payload, "errorDetails", &error_buffer) catch null else null;
         if (state) |value| debug("state: {s}\n", .{value});
-        if (state != null and std.mem.eql(u8, state.?, target)) {
-            c.go_http_response_destroy(response);
-            return;
+        if (state) |value| {
+            for (targets, 0..) |target, index| {
+                if (std.mem.eql(u8, value, target)) {
+                    c.go_http_response_destroy(response);
+                    return index;
+                }
+            }
         }
         if (state != null and (std.mem.eql(u8, state.?, "Failed") or
             std.mem.eql(u8, state.?, "Expired")))
@@ -178,11 +218,12 @@ fn connect(session: *Session) !void {
     if (bufferString(&session.session_path).len == 0) return error.MissingSession;
     const passport_token = cString(c.go_xbox_auth_passport_token(session.auth)) orelse
         return error.MissingPassportToken;
+    const host = baseUrl(session) orelse return error.MissingBaseUrl;
     var url_buffer: [512]u8 = undefined;
     const url = try std.fmt.bufPrintZ(
         &url_buffer,
         "{s}/{s}/connect",
-        .{ base_url, bufferString(&session.session_path) },
+        .{ host, bufferString(&session.session_path) },
     );
     var body_buffer: [16384]u8 = undefined;
     const body = try std.fmt.bufPrintZ(&body_buffer, "{{\"userToken\":\"{s}\"}}", .{passport_token});
@@ -193,11 +234,12 @@ fn connect(session: *Session) !void {
 }
 
 fn sendKeepalive(session: *Session) !void {
+    const host = baseUrl(session) orelse return error.MissingBaseUrl;
     var url_buffer: [512]u8 = undefined;
     const url = try std.fmt.bufPrintZ(
         &url_buffer,
         "{s}/{s}/keepalive",
-        .{ base_url, bufferString(&session.session_path) },
+        .{ host, bufferString(&session.session_path) },
     );
     const response = request(session, "POST", url.ptr, null, null, 0);
     defer c.go_http_response_destroy(response);
@@ -252,8 +294,9 @@ fn end(session: *Session) void {
     const path = bufferString(&session.session_path);
     if (path.len == 0) return;
 
+    const host = baseUrl(session) orelse return;
     var url_buffer: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&url_buffer, "{s}/{s}", .{ base_url, path })) |url| {
+    if (std.fmt.bufPrintZ(&url_buffer, "{s}/{s}", .{ host, path })) |url| {
         const response = request(session, "DELETE", url.ptr, null, null, 0);
         c.go_http_response_destroy(response);
     } else |_| {}
@@ -268,9 +311,18 @@ pub export fn go_cloud_session_create(auth: ?*c.GoXboxAuth, ui: ?*c.GoHandheldUi
     return session;
 }
 
+pub export fn go_cloud_session_create_home(auth: ?*c.GoXboxAuth, ui: ?*c.GoHandheldUi) ?*Session {
+    const session = go_cloud_session_create(auth, ui) orelse return null;
+    session.offering = .home;
+    return session;
+}
+
 pub export fn go_cloud_session_base_url(session: ?*const Session) [*c]const u8 {
-    if (session == null) return null;
-    return base_url;
+    const handle = session orelse return null;
+    return switch (handle.offering) {
+        .cloud => base_url,
+        .home => c.go_xbox_auth_home_base_url(handle.auth),
+    };
 }
 
 pub export fn go_cloud_session_path(session: ?*const Session) [*c]const u8 {
@@ -307,6 +359,16 @@ pub export fn go_cloud_session_wait_for_state(
     if (max_polls <= 0) return -1;
     waitForState(handle, target_state, @intCast(max_polls)) catch return -1;
     return 0;
+}
+
+// xHome: waits for ReadyToConnect or Provisioned. Returns 1 when the session
+// wants the connect step first, 2 when it is already provisioned, -1 on
+// failure/cancel/timeout.
+pub export fn go_cloud_session_wait_ready_or_provisioned(session: ?*Session, max_polls: c_int) c_int {
+    const handle = session orelse return -1;
+    if (max_polls <= 0) return -1;
+    const index = waitForAnyState(handle, &.{ "ReadyToConnect", "Provisioned" }, @intCast(max_polls)) catch return -1;
+    return @as(c_int, @intCast(index)) + 1;
 }
 
 pub export fn go_cloud_session_connect(session: ?*Session) c_int {

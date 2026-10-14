@@ -236,6 +236,9 @@ pub export fn go_controller_input_encode_metadata(
     @memset(bytes[0..15], 0);
     bytes[0] = 0x08;
     std.mem.writeInt(u32, bytes[2..6], sequence, .little);
+    // Same clock as the gamepad reports (the reference client uses performance.now()).
+    std.mem.writeInt(u64, bytes[6..14], @bitCast(@as(f64, @floatFromInt(c.SDL_GetTicks()))), .little);
+    bytes[14] = 1; // max touchpoints
     return 15;
 }
 
@@ -275,7 +278,9 @@ pub export fn go_controller_input_encode(
     wire.encodeGamepadRaw(
         bytes[0..wire.PACKET_SIZE],
         handle.sequence,
-        0.0,
+        // Milliseconds since start, like the reference client's performance.now();
+        // xHome games use it to order input, the dashboard ignores it.
+        @floatFromInt(c.SDL_GetTicks()),
         wire.buttonMask(source_buttons),
         axis(handle, c.SDL_CONTROLLER_AXIS_LEFTX),
         left_y,

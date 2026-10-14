@@ -22,6 +22,12 @@ GoXboxAuthResult go_xbox_auth_refresh(GoXboxAuth* auth);
 int go_xbox_auth_sign_out(GoXboxAuth* auth);
 const char* go_xbox_auth_gssv_token(const GoXboxAuth* auth);
 const char* go_xbox_auth_passport_token(const GoXboxAuth* auth);
+/* Home (console/LAN) streaming token and its discovered session host. Both
+ * return NULL when home streaming isn't available for this account (no
+ * linked console, unsupported region) - treat that as "no consoles", not an
+ * error; the cloud token/flow above is unaffected either way. */
+const char* go_xbox_auth_home_gssv_token(const GoXboxAuth* auth);
+const char* go_xbox_auth_home_base_url(const GoXboxAuth* auth);
 void go_xbox_auth_destroy(GoXboxAuth* auth);
 
 #ifdef __cplusplus

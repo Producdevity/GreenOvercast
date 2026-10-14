@@ -8,6 +8,13 @@ pub const FaceButtonMode = enum {
     swapped,
 };
 
+// The Cedar hardware decoder can leave blocky artifacts on some streams;
+// software decoding avoids them at the cost of CPU time.
+pub const VideoDecoder = enum {
+    auto,
+    software,
+};
+
 pub const GameSettings = struct {
     product_id: [product_id_capacity]u8 = [_]u8{0} ** product_id_capacity,
     favorite: bool = false,
@@ -18,6 +25,8 @@ pub const Store = struct {
     path_length: usize = 0,
     face_buttons: FaceButtonMode = .system,
     artwork_enabled: bool = true,
+    video_decoder: VideoDecoder = .auto,
+    smooth_video: bool = false,
     games: [max_games]GameSettings = [_]GameSettings{.{}} ** max_games,
     game_count: usize = 0,
 
@@ -70,6 +79,8 @@ pub const Store = struct {
         try writer.writeAll("version\t1\n");
         try writer.print("face_buttons\t{s}\n", .{@tagName(self.face_buttons)});
         try writer.print("artwork\t{d}\n", .{@intFromBool(self.artwork_enabled)});
+        try writer.print("video_decoder\t{s}\n", .{@tagName(self.video_decoder)});
+        try writer.print("smooth_video\t{d}\n", .{@intFromBool(self.smooth_video)});
         for (self.games[0..self.game_count]) |*entry| {
             try writer.print("game\t{s}\t{d}\n", .{
                 productId(entry),
@@ -118,6 +129,13 @@ pub const Store = struct {
             } else if (std.mem.eql(u8, kind, "artwork")) {
                 const value = fields.next() orelse continue;
                 self.artwork_enabled = std.mem.eql(u8, value, "1");
+            } else if (std.mem.eql(u8, kind, "video_decoder")) {
+                const value = fields.next() orelse continue;
+                if (std.mem.eql(u8, value, "auto")) self.video_decoder = .auto;
+                if (std.mem.eql(u8, value, "software")) self.video_decoder = .software;
+            } else if (std.mem.eql(u8, kind, "smooth_video")) {
+                const value = fields.next() orelse continue;
+                self.smooth_video = std.mem.eql(u8, value, "1");
             } else if (std.mem.eql(u8, kind, "game")) {
                 const id = fields.next() orelse continue;
                 const favorite = fields.next() orelse continue;
@@ -145,18 +163,22 @@ test "settings round trip through the file format" {
     var store = Store{};
     store.face_buttons = .swapped;
     store.artwork_enabled = false;
+    store.video_decoder = .software;
+    store.smooth_video = true;
     const game_settings = store.game("PRODUCT-1").?;
     game_settings.favorite = true;
 
     var data = std.ArrayList(u8).init(std.testing.allocator);
     defer data.deinit();
-    try data.writer().writeAll("version\t1\nface_buttons\tswapped\nartwork\t0\n");
+    try data.writer().writeAll("version\t1\nface_buttons\tswapped\nartwork\t0\nvideo_decoder\tsoftware\nsmooth_video\t1\n");
     try data.writer().writeAll("game\tPRODUCT-1\t1\n");
 
     var parsed = Store{};
     try parsed.parse(data.items);
     try std.testing.expectEqual(FaceButtonMode.swapped, parsed.face_buttons);
     try std.testing.expect(!parsed.artwork_enabled);
+    try std.testing.expectEqual(VideoDecoder.software, parsed.video_decoder);
+    try std.testing.expect(parsed.smooth_video);
     const parsed_game = parsed.findGame("PRODUCT-1").?;
     try std.testing.expect(parsed_game.favorite);
 }

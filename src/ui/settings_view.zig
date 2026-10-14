@@ -21,6 +21,8 @@ const StopRequested = ?*const fn (?*anyopaque) callconv(.c) c_int;
 const Row = enum {
     face_buttons,
     artwork,
+    video_decoder,
+    smooth_video,
     sign_out,
 };
 
@@ -117,6 +119,8 @@ fn activate(
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
+        .video_decoder => store.video_decoder = if (store.video_decoder == .auto) .software else .auto,
+        .smooth_video => store.smooth_video = !store.smooth_video,
         .sign_out => return true,
     }
     store.save() catch std.debug.print("Settings could not be saved\n", .{});
@@ -127,14 +131,18 @@ fn previousRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .sign_out,
         .artwork => .face_buttons,
-        .sign_out => .artwork,
+        .video_decoder => .artwork,
+        .smooth_video => .video_decoder,
+        .sign_out => .smooth_video,
     };
 }
 
 fn nextRow(row: Row) Row {
     return switch (row) {
         .face_buttons => .artwork,
-        .artwork => .sign_out,
+        .artwork => .video_decoder,
+        .video_decoder => .smooth_video,
+        .smooth_video => .sign_out,
         .sign_out => .face_buttons,
     };
 }
@@ -165,10 +173,14 @@ fn draw(
 
     drawRow(renderer, 92, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
     drawRow(renderer, 148, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
-    drawRow(renderer, 204, "ACCOUNT", "SIGN OUT", selected == .sign_out);
+    drawRow(renderer, 204, "VIDEO DECODER", if (store.video_decoder == .auto) "AUTO" else "SOFTWARE", selected == .video_decoder);
+    drawRow(renderer, 260, "SMOOTH VIDEO", if (store.smooth_video) "ON" else "OFF", selected == .smooth_video);
+    drawRow(renderer, 316, "ACCOUNT", "SIGN OUT", selected == .sign_out);
 
     drawMappingExplanation(renderer, store.face_buttons);
-    font.text(renderer, 18, 340, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
+    font.text(renderer, 18, 362, 2, "USE SWAPPED ONLY IF BUTTONS ARE REVERSED", style.muted());
+    font.text(renderer, 18, 380, 2, "SOFTWARE DECODER: NO BLOCKY VIDEO, MORE CPU", style.muted());
+    font.text(renderer, 18, 398, 2, "SMOOTH VIDEO: FEWER SKIPPED FRAMES, MORE DELAY", style.muted());
     const prompts = [_]controls.Prompt{
         controls.Prompt.one(controls.face(store.face_buttons, .a), "CHANGE"),
         controls.Prompt.one(.dpad, "MOVE"),

@@ -14,7 +14,12 @@ const oauth_token_url = "https://login.microsoftonline.com/consumers/oauth2/v2.0
 const oauth_scope = "xboxlive.signin openid profile offline_access";
 const passport_scope = "service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN";
 const offering_url = "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user";
+const home_offering_url = "https://xhome.gssv-play-prod.xboxlive.com/v2/login/user";
 const xbox_web_client_id = "1f907974-e22b-4810-a9de-d9647380c97e";
+// xHome discovery is best-effort and optional: an account with no linked
+// console must never make cloud sign-in wait out the full 30s HTTP timeout,
+// so it gets a much shorter deadline of its own.
+const home_offering_timeout_seconds: c_long = 5;
 
 const auth_failed: c_int = -1;
 const auth_ok: c_int = 0;
@@ -33,6 +38,16 @@ const Auth = struct {
     passport_token: [8192]u8 = [_]u8{0} ** 8192,
     token_path: [512]u8 = [_]u8{0} ** 512,
     token_key_path: [512]u8 = [_]u8{0} ** 512,
+    // xHome (console streaming over LAN/local network). Kept separate from
+    // the cloud fields above: a different GSSV offering ("xhome" instead of
+    // "xgpuweb"), a different bearer token, and - unlike cloud, which always
+    // talks to the fixed weu.core.gssv-play-prod.xboxlive.com host - a base
+    // URL that is only known once the login/user response names the
+    // account's default region. Missing/empty means home streaming is
+    // unavailable (no linked console, unsupported region, or not yet
+    // fetched); this must never affect the cloud fields or cloud_session.
+    home_gssv_token: [8192]u8 = [_]u8{0} ** 8192,
+    home_base_url: [256]u8 = [_]u8{0} ** 256,
 };
 
 fn cString(buffer: []const u8) []const u8 {
@@ -278,6 +293,8 @@ fn refresh(auth: *Auth) !c_int {
     std.crypto.secureZero(u8, &auth.gssv_token);
     std.crypto.secureZero(u8, &auth.user_token);
     std.crypto.secureZero(u8, &auth.passport_token);
+    std.crypto.secureZero(u8, &auth.home_gssv_token);
+    std.crypto.secureZero(u8, &auth.home_base_url);
 
     var body_buffer: [32768]u8 = undefined;
     var form_headers = [_][*c]const u8{"Content-Type: application/x-www-form-urlencoded"};
@@ -399,6 +416,42 @@ fn refresh(auth: *Auth) !c_int {
     c.go_http_response_destroy(response);
     debug("gsToken obtained\n", .{});
 
+    // xHome reuses the same XSTS token as cloud (both are authorized against
+    // the "http://gssv.xboxlive.com/" relying party above) - only the
+    // offeringId and host differ. This is best-effort and never fatal: an
+    // account with no console linked, or in a region xHome doesn't cover,
+    // simply won't get a home_gssv_token, and cloud keeps working exactly as
+    // before.
+    const home_offering_body = try std.fmt.bufPrintZ(
+        &body_buffer,
+        "{{\"token\":\"{s}\",\"offeringId\":\"xhome\"}}",
+        .{xsts},
+    );
+    response = c.go_http_request_with_timeout(
+        "POST",
+        home_offering_url,
+        home_offering_body.ptr,
+        @ptrCast(&gssv_headers),
+        gssv_headers.len,
+        home_offering_timeout_seconds,
+    );
+    if (response != null and response.*.status == 200) {
+        if (responseData(response)) |home_data| {
+            _ = jsonString(home_data, "gsToken", &auth.home_gssv_token) catch {};
+            _ = json.parseDefaultRegionBaseUri(home_data, &auth.home_base_url) catch {};
+        }
+        if (cString(&auth.home_gssv_token).len != 0 and cString(&auth.home_base_url).len != 0) {
+            debug("Home gsToken obtained ({s})\n", .{cString(&auth.home_base_url)});
+        } else {
+            std.crypto.secureZero(u8, &auth.home_gssv_token);
+            std.crypto.secureZero(u8, &auth.home_base_url);
+            debug("Home offering response was missing a token or default region\n", .{});
+        }
+    } else {
+        debug("Home offering unavailable (no linked console or unsupported region)\n", .{});
+    }
+    c.go_http_response_destroy(response);
+
     const passport_body = try buildForm(&body_buffer, &.{
         .{ .key = "client_id", .value = cString(&auth.client_id) },
         .{ .key = "grant_type", .value = "refresh_token" },
@@ -487,6 +540,8 @@ pub export fn go_xbox_auth_sign_out(auth: ?*Auth) c_int {
     std.crypto.secureZero(u8, &handle.user_token);
     std.crypto.secureZero(u8, &handle.refresh_token);
     std.crypto.secureZero(u8, &handle.passport_token);
+    std.crypto.secureZero(u8, &handle.home_gssv_token);
+    std.crypto.secureZero(u8, &handle.home_base_url);
     return c.go_token_store_delete(
         @ptrCast(&handle.token_path),
         @ptrCast(&handle.token_key_path),
@@ -501,6 +556,21 @@ pub export fn go_xbox_auth_gssv_token(auth: ?*const Auth) [*c]const u8 {
 pub export fn go_xbox_auth_passport_token(auth: ?*const Auth) [*c]const u8 {
     const handle = auth orelse return null;
     return @ptrCast(&handle.passport_token);
+}
+
+// Both return null when home streaming isn't available for this account
+// (see the comment above the Auth.home_gssv_token field) - callers must
+// treat that as "no consoles to show", not as an error.
+pub export fn go_xbox_auth_home_gssv_token(auth: ?*const Auth) [*c]const u8 {
+    const handle = auth orelse return null;
+    if (handle.home_gssv_token[0] == 0) return null;
+    return @ptrCast(&handle.home_gssv_token);
+}
+
+pub export fn go_xbox_auth_home_base_url(auth: ?*const Auth) [*c]const u8 {
+    const handle = auth orelse return null;
+    if (handle.home_base_url[0] == 0) return null;
+    return @ptrCast(&handle.home_base_url);
 }
 
 pub export fn go_xbox_auth_destroy(auth: ?*Auth) void {

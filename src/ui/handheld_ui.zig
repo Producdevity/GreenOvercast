@@ -29,6 +29,8 @@ const Ui = struct {
     cancelled: bool = false,
     stream_width: u32,
     stream_height: u32,
+    console_rows: [c.GO_UI_MAX_CONSOLES]library.ConsoleRow = undefined,
+    console_count: usize = 0,
 };
 
 const ArtworkSelection = struct {
@@ -386,11 +388,17 @@ fn updateArtwork(ui: *Ui, view: *const library.View, state: *ArtworkSelection) ?
 }
 
 fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_int {
-    if (titles.len == 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    // An empty title list is only a dead end without any console to fall
+    // back to; otherwise the CONSOLES tab still has something to pick.
+    if (titles.len == 0 and ui.console_count == 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
     ui.cancelled = false;
     const indices = std.heap.c_allocator.alloc(usize, titles.len) catch return c.GO_HANDHELD_UI_PICK_CANCELLED;
     defer std.heap.c_allocator.free(indices);
-    var view = library.View{ .titles = titles, .indices = indices };
+    var view = library.View{
+        .titles = titles,
+        .indices = indices,
+        .consoles = ui.console_rows[0..ui.console_count],
+    };
     view.rebuild(&ui.settings, library.requestedTitle(titles, requested));
     var repeat = navigation.Repeater{};
     var horizontal_latch = navigation.AxisLatch{};
@@ -416,7 +424,10 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                 return c.GO_HANDHELD_UI_PICK_CANCELLED;
             }
             if (event.type == c.SDL_CONTROLLERBUTTONDOWN and activeControllerEvent(ui, &event)) switch (semanticButton(ui, event.cbutton.button)) {
-                c.SDL_CONTROLLER_BUTTON_A => if (view.selectedTitleIndex()) |title_index| {
+                c.SDL_CONTROLLER_BUTTON_A => if (view.collection == .consoles) {
+                    if (view.console_selected < view.consoles.len)
+                        return c.GO_HANDHELD_UI_PICK_CONSOLE_BASE - @as(c_int, @intCast(view.console_selected));
+                } else if (view.selectedTitleIndex()) |title_index| {
                     return @intCast(title_index);
                 },
                 c.SDL_CONTROLLER_BUTTON_B => {
@@ -425,6 +436,7 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                     return c.GO_HANDHELD_UI_PICK_CANCELLED;
                 },
                 c.SDL_CONTROLLER_BUTTON_X => {
+                    if (view.collection == .consoles) continue;
                     const preserve = view.selectedTitleIndex();
                     const result = runSearchKeyboard(ui, &view);
                     if (result < 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
@@ -652,13 +664,46 @@ pub export fn go_handheld_ui_pick_title(
     count: c_int,
     requested: [*c]const u8,
 ) c_int {
-    if (titles == null or count <= 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
-    const parsed_titles: [*]const library.Title = @ptrCast(@alignCast(titles));
-    return pickTitle(ui orelse return c.GO_HANDHELD_UI_PICK_CANCELLED, parsed_titles[0..@intCast(count)], pointerString(requested) orelse "");
+    const handle = ui orelse return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    // A zero-title catalog is only a dead end when there's also nothing on
+    // the CONSOLES tab; otherwise the picker still has something to show.
+    if (count < 0 or (count == 0 and handle.console_count == 0) or
+        (count > 0 and titles == null)) return c.GO_HANDHELD_UI_PICK_CANCELLED;
+    const parsed_titles: []const library.Title = if (count > 0)
+        @as([*]const library.Title, @ptrCast(@alignCast(titles)))[0..@intCast(count)]
+    else
+        &.{};
+    return pickTitle(handle, parsed_titles, pointerString(requested) orelse "");
+}
+
+pub export fn go_handheld_ui_set_consoles(ui: ?*Ui, rows: [*c]const c.GoUiConsoleRow, count: c_int) void {
+    const handle = ui orelse return;
+    handle.console_count = 0;
+    if (rows == null or count <= 0) return;
+    const limit: usize = @min(@as(usize, @intCast(count)), c.GO_UI_MAX_CONSOLES);
+    for (0..limit) |index| {
+        @memcpy(&handle.console_rows[index].name, &rows[index].name);
+        handle.console_rows[index].name[handle.console_rows[index].name.len - 1] = 0;
+        @memcpy(&handle.console_rows[index].power_state, &rows[index].power_state);
+        handle.console_rows[index].power_state[handle.console_rows[index].power_state.len - 1] = 0;
+    }
+    handle.console_count = limit;
+}
+
+pub export fn go_handheld_ui_console_count(ui: ?*const Ui) c_int {
+    return @intCast((ui orelse return 0).console_count);
 }
 
 pub export fn go_handheld_ui_cancelled(ui: ?*const Ui) c_int {
     return @intFromBool(if (ui) |handle| handle.cancelled else false);
+}
+
+pub export fn go_handheld_ui_software_decoder(ui: ?*const Ui) c_int {
+    return @intFromBool((ui orelse return 0).settings.video_decoder == .software);
+}
+
+pub export fn go_handheld_ui_smooth_video(ui: ?*const Ui) c_int {
+    return @intFromBool((ui orelse return 0).settings.smooth_video);
 }
 
 pub export fn go_handheld_ui_stream_width(ui: ?*const Ui) c_uint {

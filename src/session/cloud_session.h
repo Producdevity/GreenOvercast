@@ -17,6 +17,10 @@ typedef struct {
 } GoCloudSessionStats;
 
 GoCloudSession* go_cloud_session_create(GoXboxAuth* auth, GoHandheldUi* ui);
+/* Same session type, but for xHome console streaming: uses the home token and
+ * the host discovered at login, and go_cloud_session_start_game() takes the
+ * console's serverId instead of a titleId. */
+GoCloudSession* go_cloud_session_create_home(GoXboxAuth* auth, GoHandheldUi* ui);
 const char* go_cloud_session_base_url(const GoCloudSession* session);
 const char* go_cloud_session_path(const GoCloudSession* session);
 GoHttpResponse* go_cloud_session_request(GoCloudSession* session, const char* method,
@@ -24,6 +28,9 @@ GoHttpResponse* go_cloud_session_request(GoCloudSession* session, const char* me
                                          const char** extra_headers, int extra_header_count);
 int go_cloud_session_start_game(GoCloudSession* session, const char* title_id);
 int go_cloud_session_wait_for_state(GoCloudSession* session, const char* target, int max_polls);
+/* xHome only: returns 1 when the session needs go_cloud_session_connect()
+ * first (ReadyToConnect), 2 when it is already Provisioned, -1 on failure. */
+int go_cloud_session_wait_ready_or_provisioned(GoCloudSession* session, int max_polls);
 int go_cloud_session_connect(GoCloudSession* session);
 int go_cloud_session_start_keepalive(GoCloudSession* session);
 void go_cloud_session_stop_keepalive(GoCloudSession* session);
