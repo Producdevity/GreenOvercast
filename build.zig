@@ -488,6 +488,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path(root.path),
             .target = b.graph.host,
             .optimize = .Debug,
+            .link_libc = true,
         });
         addProjectIncludes(b, unit_tests.root_module);
         for (root.imports) |item|

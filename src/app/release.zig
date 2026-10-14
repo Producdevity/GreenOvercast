@@ -625,8 +625,10 @@ pub const Release = struct {
         if (!self.initializeMedia()) return .failed;
         // Best effort: refreshes power state (e.g. a console that went to
         // sleep during/after streaming) so the CONSOLES tab doesn't keep
-        // showing stale state until the next sign-in.
-        self.loadConsoles();
+        // showing stale state until the next sign-in. Only for accounts that
+        // already have a console, so a pure-cloud session never pays for an
+        // extra xHome lookup (and its timeout) it has no use for.
+        if (self.console_count > 0) self.loadConsoles();
         return .ok;
     }
 
