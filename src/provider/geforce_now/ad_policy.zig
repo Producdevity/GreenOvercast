@@ -83,13 +83,41 @@ pub fn expand(allocator: std.mem.Allocator, url: []const u8, played: u64, error_
             break;
         }
         if (!replaced) {
-            if (url[cursor] == '[') return error.UnsupportedTrackingMacro;
+            if (url[cursor] == '[') {
+                if (std.mem.indexOfScalarPos(u8, url, cursor + 1, ']')) |end| {
+                    if (unavailableMacro(url[cursor + 1 .. end])) {
+                        try result.appendSlice("-1");
+                        if (result.items.len > 8192) return error.InvalidAdUrl;
+                        cursor = end + 1;
+                        continue;
+                    }
+                }
+            }
             try result.append(url[cursor]);
             cursor += 1;
         }
         if (result.items.len > 8192) return error.InvalidAdUrl;
     }
     return result.toOwnedSlice();
+}
+
+fn unavailableMacro(name: []const u8) bool {
+    // VAST's unknown-value marker applies to defined macros, not vendor tokens.
+    const optional = [_][]const u8{
+        "BREAKPOSITION",    "BLOCKEDADCATEGORIES", "ADCATEGORIES",   "ADCOUNT",          "TRANSACTIONID",
+        "PLACEMENTTYPE",    "ADTYPE",              "UNIVERSALADID",  "BREAKMAXDURATION", "BREAKMAXADS",
+        "BREAKMINADLENGTH", "BREAKMAXADLENGTH",    "IFA",            "IFATYPE",          "CLIENTUA",
+        "SERVERUA",         "DEVICEUA",            "SERVERSIDE",     "DEVICEIP",         "LATLONG",
+        "DOMAIN",           "PAGEURL",             "APPBUNDLE",      "VASTVERSIONS",     "APIFRAMEWORKS",
+        "EXTENSIONS",       "VERIFICATIONVENDORS", "OMIDPARTNER",    "MEDIAMIME",        "PLAYERCAPABILITIES",
+        "CLICKTYPE",        "PLAYERSTATE",         "INVENTORYSTATE", "PLAYERSIZE",       "ASSETURI",
+        "CONTENTID",        "CONTENTURI",          "PODSEQUENCE",    "ADSERVINGID",      "CLICKPOS",
+        "REGULATIONS",      "GDPRCONSENT",         "STOREID",        "STOREURL",         "PLAYBACKMETHODS",
+        "CONTENTCAT",       "GPPSTRING",           "GPPSECTIONID",   "DSAREQUIRED",      "DSAPARAMS",
+        "DSAPUBRENDER",
+    };
+    for (optional) |macro| if (std.mem.eql(u8, name, macro)) return true;
+    return false;
 }
 
 fn timestamp(buffer: []u8, milliseconds: i64) ![]const u8 {
@@ -172,6 +200,9 @@ test "pod selection excludes the buffet and honors wrapper restrictions" {
     defer std.testing.allocator.free(single);
     try std.testing.expectEqual(@as(usize, 1), single.len);
     try std.testing.expect(single[0].sequence == null);
+    const sequenced_only = try selectAds(std.testing.allocator, ads[0..1], false, true);
+    defer std.testing.allocator.free(sequenced_only);
+    try std.testing.expectEqual(@as(usize, 0), sequenced_only.len);
     const wrapper = [_]vast.Ad{.{ .sequence = null, .impressions = &.{}, .errors = &.{}, .body = .{ .wrapper = .{ .url = "https://example.invalid", .follow_wrappers = true, .allow_multiple = false, .fallback_on_no_ad = false } } }};
     const ignored = try selectAds(std.testing.allocator, &wrapper, true, false);
     defer std.testing.allocator.free(ignored);
@@ -196,7 +227,9 @@ test "tracking macros distinguish ad time from the unstarted game" {
     try std.testing.expectEqualStrings("https://example.invalid/?ad=00%3A00%3A01.250&game=00%3A00%3A00.000&error=303&reason=2", encoded);
     var buffer: [64]u8 = undefined;
     try std.testing.expectEqualStrings("1970-01-01T00%3A00%3A00.000Z", try timestamp(&buffer, 0));
-    try std.testing.expectError(error.UnsupportedTrackingMacro, expand(std.testing.allocator, "https://example.invalid/?x=[UNKNOWN]", 0, 0, 0));
+    const unavailable = try expand(std.testing.allocator, "https://[2001:4860::8888]/?asset=[ASSETURI]&id=[ADSERVINGID]&ua=[DEVICEUA]&state=[PLAYERSTATE]&break=[BREAKPOSITION]&custom=[VENDOR_TOKEN]", 0, 0, 0);
+    defer std.testing.allocator.free(unavailable);
+    try std.testing.expectEqualStrings("https://[2001:4860::8888]/?asset=-1&id=-1&ua=-1&state=-1&break=-1&custom=[VENDOR_TOKEN]", unavailable);
 }
 
 test "tag preparation preserves supplied consent, targeting and request identity" {
