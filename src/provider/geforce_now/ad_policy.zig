@@ -58,6 +58,14 @@ pub fn iconPosition(position: vast.Position, extent: c_int, size: u16) c_int {
         .pixel => |value| @min(value, @max(0, extent - size)),
     };
 }
+
+pub fn fitImage(width: u16, height: u16, max_width: c_int, max_height: c_int) !struct { width: c_int, height: c_int } {
+    if (width == 0 or height == 0 or max_width <= 0 or max_height <= 0) return error.InvalidImageSize;
+    const w: u64 = @intCast(@min(width, max_width));
+    const h: u64 = @intCast(@min(height, max_height));
+    if (w * height <= h * width) return .{ .width = @intCast(w), .height = @intCast(@max(1, w * height / width)) };
+    return .{ .width = @intCast(@max(1, h * width / height)), .height = @intCast(h) };
+}
 pub fn expand(allocator: std.mem.Allocator, url: []const u8, played: u64, error_code: u16, verification: u8) ![]u8 {
     var result = std.ArrayList(u8).init(allocator);
     errdefer result.deinit();
@@ -219,6 +227,22 @@ test "progress thresholds and completion follow playback, not wall time" {
     const offset = vast.Track{ .event = "progress", .url = "https://example.invalid", .offset_percent = 75 };
     try std.testing.expect(!due(offset, 3749, 5000, false));
     try std.testing.expect(due(offset, 3750, 5000, false));
+}
+
+test "AdChoices images fit without cropping or enlarging" {
+    const cases = [_]struct { width: u16, height: u16, expected_width: c_int, expected_height: c_int }{
+        .{ .width = 1920, .height = 1080, .expected_width = 640, .expected_height = 360 },
+        .{ .width = 400, .height = 150, .expected_width = 400, .expected_height = 150 },
+        .{ .width = 600, .height = 1080, .expected_width = 244, .expected_height = 440 },
+        .{ .width = 1, .height = 1080, .expected_width = 1, .expected_height = 440 },
+    };
+    for (cases) |case| {
+        const size = try fitImage(case.width, case.height, 640, 440);
+        try std.testing.expectEqual(case.expected_width, size.width);
+        try std.testing.expectEqual(case.expected_height, size.height);
+    }
+    try std.testing.expectError(error.InvalidImageSize, fitImage(0, 1, 640, 440));
+    try std.testing.expectError(error.InvalidImageSize, fitImage(1, 1, 640, 0));
 }
 
 test "tracking macros distinguish ad time from the unstarted game" {

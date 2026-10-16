@@ -18,7 +18,8 @@ const Metadata = struct {
 };
 const Resolved = struct { creative: vast.Creative, metadata: Metadata };
 const Parent = struct { metadata: Metadata, follow_wrappers: bool, allow_multiple: bool };
-const IconTexture = struct { image: *c.SDL_Texture, fallback: *c.SDL_Texture, icon: vast.Icon, viewed: bool = false };
+const ImageTexture = struct { handle: *c.SDL_Texture, width: u16, height: u16 };
+const IconTexture = struct { image: ImageTexture, fallback: ImageTexture, icon: vast.Icon, viewed: bool = false };
 
 pub const Playback = struct {
     renderer: *c.SDL_Renderer,
@@ -59,7 +60,10 @@ pub const Playback = struct {
             const reason = if (err == error.VastEmptyResponse) "VAST_EMPTY_RESPONSE" else if (err == error.VastNoAdsAfterWrapper)
                 "VAST_NO_ADS_AFTER_WRAPPER"
             else if (err == error.Cancelled) "USER_CANCELLED" else @errorName(err);
-            try worker.reporter.send(worker.reporter.context, .{ .action = .cancel, .reason = reason, .watched_ms = self.watched_ms, .paused_ms = self.paused_ms, .duration_ms = self.duration_ms });
+            worker.reporter.send(worker.reporter.context, .{ .action = .cancel, .reason = reason, .watched_ms = self.watched_ms, .paused_ms = self.paused_ms, .duration_ms = self.duration_ms }) catch |report_error| {
+                std.debug.print("GeForce NOW ad cancellation failed: {s} after {s}\n", .{ @errorName(report_error), reason });
+                return if (no_fill) report_error else err;
+            };
             std.debug.print("GeForce NOW ad: {s}, watched {d}ms\n", .{ reason, self.watched_ms });
             if (!no_fill) return err;
         };
@@ -129,9 +133,9 @@ pub const Playback = struct {
             const prior = self.watched_ms;
             self.play(worker, ad, index == 0) catch |err| {
                 if (err != error.Cancelled) for (ad.metadata.errors) |address| {
-                    try beacon(worker, storage, address, self.watched_ms - prior, policy.errorCode(err));
+                    beacon(worker, storage, address, self.watched_ms - prior, policy.errorCode(err)) catch {};
                 };
-                try self.drain(worker);
+                self.drain(worker) catch {};
                 return err;
             };
         }
@@ -207,17 +211,17 @@ pub const Playback = struct {
         var icons = std.ArrayList(IconTexture).init(self.allocator);
         defer {
             for (icons.items) |icon| {
-                c.SDL_DestroyTexture(icon.image);
-                c.SDL_DestroyTexture(icon.fallback);
+                c.SDL_DestroyTexture(icon.image.handle);
+                c.SDL_DestroyTexture(icon.fallback.handle);
             }
             icons.deinit();
         }
         for (ad.metadata.icons) |icon| {
             const fallback_url = icon.fallback orelse return error.UnsupportedAdChoices;
-            const image = try self.loadTexture(worker, icon.image);
-            errdefer c.SDL_DestroyTexture(image);
-            const fallback = try self.loadTexture(worker, fallback_url);
-            errdefer c.SDL_DestroyTexture(fallback);
+            const image = try self.loadTexture(worker, icon.image, 640, 480);
+            errdefer c.SDL_DestroyTexture(image.handle);
+            const fallback = try self.loadTexture(worker, fallback_url, vast.max_fallback_width, vast.max_fallback_height);
+            errdefer c.SDL_DestroyTexture(fallback.handle);
             try icons.append(.{ .image = image, .fallback = fallback, .icon = icon });
         }
         const media = policy.selectMedia(ad.creative.media) orelse return error.UnsupportedMedia;
@@ -271,7 +275,7 @@ pub const Playback = struct {
                 for (icons.items, 0..) |*icon, index| {
                     if (!policy.iconVisible(icon.icon, progress.played_ms)) continue;
                     const rect = c.SDL_Rect{ .x = policy.iconPosition(icon.icon.x, size.width, icon.icon.width), .y = policy.iconPosition(icon.icon.y, size.height, icon.icon.height), .w = icon.icon.width, .h = icon.icon.height };
-                    if (c.SDL_RenderCopy(self.renderer, icon.image, null, &rect) != 0) return error.AdIconRenderFailed;
+                    if (c.SDL_RenderCopy(self.renderer, icon.image.handle, null, &rect) != 0) return error.AdIconRenderFailed;
                     if (index == selected and icons.items.len > 1 and !modal) {
                         const outline = c.SDL_Rect{ .x = rect.x - 1, .y = rect.y - 1, .w = rect.w + 2, .h = rect.h + 2 };
                         _ = c.SDL_SetRenderDrawColor(self.renderer, 255, 255, 255, 255);
@@ -291,8 +295,9 @@ pub const Playback = struct {
                         _ = c.SDL_SetRenderDrawColor(self.renderer, 0, 0, 0, 255);
                         _ = c.SDL_RenderClear(self.renderer);
                         const icon = icons.items[selected];
-                        const rect = c.SDL_Rect{ .x = @divTrunc(size.width - @as(c_int, icon.icon.fallback_width), 2), .y = @divTrunc(size.height - 40 - @as(c_int, icon.icon.fallback_height), 2), .w = icon.icon.fallback_width, .h = icon.icon.fallback_height };
-                        if (c.SDL_RenderCopy(self.renderer, icon.fallback, null, &rect) != 0) return error.AdIconRenderFailed;
+                        const fitted = try policy.fitImage(icon.fallback.width, icon.fallback.height, size.width, size.height - 40);
+                        const rect = c.SDL_Rect{ .x = @divTrunc(size.width - fitted.width, 2), .y = @divTrunc(size.height - 40 - fitted.height, 2), .w = fitted.width, .h = fitted.height };
+                        if (c.SDL_RenderCopy(self.renderer, icon.fallback.handle, null, &rect) != 0) return error.AdIconRenderFailed;
                     }
                     var hint_unobscured = player.texture_height * 640 <= player.texture_width * 400;
                     for (icons.items) |icon| {
@@ -339,17 +344,17 @@ pub const Playback = struct {
     fn event(self: *Playback, worker: *network.Worker, name: []const u8) !void {
         if (self.provider == 1) try worker.report(.{ .action = .event, .event = name, .watched_ms = self.watched_ms, .paused_ms = self.paused_ms, .duration_ms = self.duration_ms });
     }
-    fn loadTexture(self: *Playback, worker: *network.Worker, url: []const u8) !*c.SDL_Texture {
+    fn loadTexture(self: *Playback, worker: *network.Worker, url: []const u8, max_width: c_int, max_height: c_int) !ImageTexture {
         const bytes = try self.fetch(worker, url, 4 * 1024 * 1024);
         defer self.allocator.free(bytes);
         var image = std.mem.zeroes(c.GoArtworkImage);
-        if (c.go_artwork_decode_rgba(bytes.ptr, bytes.len, 640, 480, &image) != 0) return error.InvalidAdIcon;
+        if (c.go_artwork_decode_rgba(bytes.ptr, bytes.len, max_width, max_height, &image) != 0) return error.InvalidAdIcon;
         defer c.go_artwork_image_destroy(&image);
         const texture = c.SDL_CreateTexture(self.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, image.width, image.height) orelse return error.AdIconTextureUnavailable;
         errdefer c.SDL_DestroyTexture(texture);
         if (c.SDL_UpdateTexture(texture, null, image.pixels, image.stride) != 0 or
             c.SDL_SetTextureBlendMode(texture, c.SDL_BLENDMODE_BLEND) != 0) return error.AdIconTextureUnavailable;
-        return texture;
+        return .{ .handle = texture, .width = @intCast(image.width), .height = @intCast(image.height) };
     }
 };
 

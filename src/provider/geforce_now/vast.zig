@@ -9,6 +9,8 @@ pub const Track = struct {
 };
 pub const Position = union(enum) { start, end, pixel: u16 };
 pub const Media = struct { url: []const u8, width: u16, height: u16, bitrate: u32 };
+pub const max_fallback_width = 1920;
+pub const max_fallback_height = 1080;
 pub const Icon = struct {
     program: []const u8,
     image: []const u8,
@@ -131,11 +133,11 @@ fn parseIcon(allocator: std.mem.Allocator, node: *const xml.Node) !Icon {
         if (!std.mem.eql(u8, resource_type, "image/png") and !std.mem.eql(u8, resource_type, "image/jpeg")) continue;
         const width = try unsignedAttribute(u16, candidate, "width");
         const height = try unsignedAttribute(u16, candidate, "height");
-        if (width == 0 or height == 0 or width > 640 or height > 440) continue;
+        if (width == 0 or height == 0 or width > max_fallback_width or height > max_fallback_height) continue;
+        if (fallback != null and @as(u32, width) * height >= @as(u32, fallback_width) * fallback_height) continue;
         fallback = try url(resource);
         fallback_width = width;
         fallback_height = height;
-        break;
     };
     return .{
         .program = program,
@@ -189,8 +191,7 @@ fn parseIcons(allocator: std.mem.Allocator, node: *const xml.Node) ![]Icon {
         if (!std.mem.eql(u8, icon.name, "Icon")) continue;
         if (icons.items.len == 8) return error.VastLimitExceeded;
         const parsed = try parseIcon(allocator, icon);
-        if (parsed.width == 0 or parsed.height == 0 or parsed.width > 640 or parsed.height > 480 or
-            parsed.fallback_width > 640 or parsed.fallback_height > 480) return error.UnsupportedIcon;
+        if (parsed.width == 0 or parsed.height == 0 or parsed.width > 640 or parsed.height > 480) return error.UnsupportedIcon;
         try icons.append(parsed);
     };
     return icons.toOwnedSlice();
@@ -312,7 +313,7 @@ test "malformed ads and dangerous URLs never become no-fill" {
         try std.testing.expectError(error.InvalidDuration, duration(value));
 }
 
-test "VAST 3 AdChoices fallback is matched by program and display size" {
+test "VAST 3 AdChoices selects the smallest supported fallback for its program" {
     var manifest = try parse(std.testing.allocator, "<VAST version=\"3.0\"><Ad><InLine><Creatives><Creative><Linear><Duration>00:00:05</Duration>" ++
         "<MediaFiles><MediaFile delivery=\"progressive\" type=\"video/mp4\" width=\"640\" height=\"360\">https://example.invalid/video</MediaFile></MediaFiles>" ++
         "<Icons><Icon program=\"GoogleWhyThisAd\" width=\"30\" height=\"30\"><StaticResource creativeType=\"image/png\">" ++
@@ -327,6 +328,21 @@ test "VAST 3 AdChoices fallback is matched by program and display size" {
     const icon = manifest.ads[0].body.inline_ad.icons[0];
     try std.testing.expectEqualStrings("https://example.invalid/fallback", icon.fallback.?);
     try std.testing.expectEqual(@as(u16, 400), icon.fallback_width);
+}
+
+test "full HD AdChoices artwork is accepted within explicit decode bounds" {
+    for ([_][2]u16{ .{ 1920, 1080 }, .{ 1921, 1080 }, .{ 1920, 1081 }, .{ 0, 150 } }, 0..) |size, index| {
+        const bytes = try std.fmt.allocPrint(std.testing.allocator, "<VAST><Ad><InLine><Creatives><Creative><Linear><Duration>00:00:05</Duration>" ++
+            "<MediaFiles><MediaFile delivery=\"progressive\" type=\"video/mp4\" width=\"640\" height=\"360\">https://example.invalid/video</MediaFile></MediaFiles>" ++
+            "<Icons><Icon width=\"18\" height=\"18\"><StaticResource creativeType=\"image/png\">https://example.invalid/icon</StaticResource>" ++
+            "<IconClicks><IconClickFallbackImages><IconClickFallbackImage width=\"{d}\" height=\"{d}\">" ++
+            "<StaticResource creativeType=\"image/png\">https://example.invalid/panel</StaticResource>" ++
+            "</IconClickFallbackImage></IconClickFallbackImages></IconClicks></Icon></Icons></Linear></Creative></Creatives></InLine></Ad></VAST>", .{ size[0], size[1] });
+        defer std.testing.allocator.free(bytes);
+        var manifest = try parse(std.testing.allocator, bytes);
+        defer manifest.deinit();
+        try std.testing.expectEqual(index == 0, manifest.ads[0].body.inline_ad.icons[0].fallback != null);
+    }
 }
 
 test "wrapper flags and invalid sequence values are checked" {

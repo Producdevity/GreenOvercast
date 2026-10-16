@@ -527,7 +527,7 @@ pub fn build(b: *std.Build) void {
     ad_test_module.addRPathSpecial("$ORIGIN");
     const ad_test = b.addExecutable(.{ .name = "greenovercast-ad-test.aarch64", .root_module = ad_test_module });
     ad_test.step.dependOn(release);
-    const ad_test_step = b.step("ad-player-test", "Build the offline aarch64 ad playback test");
+    const ad_test_step = b.step("ad-player-test", "Build the aarch64 ad playback device test");
     ad_test_step.dependOn(&b.addInstallArtifact(ad_test, .{}).step);
 
     const product_check = b.step("product-check", "Build the complete aarch64 product");
