@@ -7,7 +7,7 @@ const allocator = std.heap.c_allocator;
 
 const inline_manifest =
     "<VAST><Ad><InLine><Impression>https://example.invalid/impression</Impression>" ++
-    "<Error>https://example.invalid/error/[ERRORCODE]</Error><Creatives><Creative><Linear>" ++
+    "<Error>https://example.invalid/error/[ERRORCODE]?at=[ADPLAYHEAD]</Error><Creatives><Creative><Linear>" ++
     "<Duration>00:00:05</Duration><MediaFiles><MediaFile delivery=\"progressive\" type=\"video/mp4\" width=\"640\" height=\"360\">" ++
     "https://example.invalid/media</MediaFile></MediaFiles><TrackingEvents>" ++
     "<Tracking event=\"start\">https://example.invalid/start</Tracking>" ++
@@ -32,15 +32,19 @@ const pod_manifest = "<VAST>" ++
     "<Ad sequence=\"2\">" ++ inline_manifest[10 .. inline_manifest.len - 12] ++ "</Ad>" ++
     "<Ad sequence=\"1\">" ++ inline_manifest[10 .. inline_manifest.len - 12] ++ "</Ad></VAST>";
 
-const Mode = enum { play, pause, cancel, broken, empty, truncated, video_tail, pod, wrapper_empty, wrapper_loop, wrapper_invalid };
+const Mode = enum { play, pause, slow_pause, audio_running, macros, tracker_failure, cancel, broken, empty, truncated, video_tail, pod, pod_truncated, pod_download_failure, wrapper_empty, wrapper_loop, wrapper_invalid };
 const Recorded = struct { update: ads.protocol.Update, time_ms: u64 };
 const Context = struct {
     media: []const u8,
     image: []const u8,
+    short_media: []const u8,
     mode: Mode,
     start: u64,
     paused: bool = false,
     resumed: bool = false,
+    playback_started_at: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    pause_accepted_at: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    media_reads: usize = 0,
     mutex: std.Thread.Mutex = .{},
     updates: std.ArrayList(Recorded),
     beacons: std.ArrayList([]u8),
@@ -48,18 +52,26 @@ const Context = struct {
     fn read(pointer: *anyopaque, storage: std.mem.Allocator, address: []const u8, _: usize, abort: *std.atomic.Value(bool)) ![]u8 {
         const self: *Context = @ptrCast(@alignCast(pointer));
         if (abort.load(.acquire)) return error.Cancelled;
-        if (std.mem.indexOf(u8, address, "/tag?") != null) return storage.dupe(u8, if (self.mode == .empty) "<VAST/>" else if (self.mode == .pod) pod_manifest else wrapper_manifest);
-        if (std.mem.endsWith(u8, address, "/inline")) return storage.dupe(u8, if (self.mode == .wrapper_empty) "<VAST/>" else if (self.mode == .wrapper_loop) wrapper_manifest else if (self.mode == .wrapper_invalid)
-            "<VAST><Ad>"
-        else
-            inline_manifest);
-        if (std.mem.endsWith(u8, address, "/media")) return storage.dupe(u8, if (self.mode == .broken) "not an MP4" else self.media);
+        if (std.mem.indexOf(u8, address, "/tag?") != null) return storage.dupe(u8, if (self.mode == .empty) "<VAST/>" else if (self.mode == .pod or self.mode == .pod_truncated or self.mode == .pod_download_failure) pod_manifest else wrapper_manifest);
+        if (std.mem.endsWith(u8, address, "/inline")) {
+            if (self.mode == .macros) return std.mem.replaceOwned(u8, storage, inline_manifest, "/impression", "/impression?asset=[ASSETURI]&amp;custom=[VENDOR_TOKEN]");
+            return storage.dupe(u8, if (self.mode == .wrapper_empty) "<VAST/>" else if (self.mode == .wrapper_loop) wrapper_manifest else if (self.mode == .wrapper_invalid) "<VAST><Ad>" else inline_manifest);
+        }
+        if (std.mem.endsWith(u8, address, "/media")) {
+            self.media_reads += 1;
+            if (self.mode == .slow_pause) c.SDL_Delay(1600);
+            if (self.mode == .pod_download_failure and self.media_reads == 2) return error.AdDownloadFailed;
+            return storage.dupe(u8, if (self.mode == .broken) "not an MP4" else if (self.mode == .pod_truncated and self.media_reads == 2) self.short_media else self.media);
+        }
         if (std.mem.endsWith(u8, address, "/icon")) return storage.dupe(u8, self.image);
         self.mutex.lock();
         defer self.mutex.unlock();
         const owned = try storage.dupe(u8, address);
-        errdefer storage.free(owned);
-        try self.beacons.append(owned);
+        self.beacons.append(owned) catch |err| {
+            storage.free(owned);
+            return err;
+        };
+        if (self.mode == .tracker_failure) return error.AdDownloadFailed;
         return storage.alloc(u8, 0);
     }
 
@@ -68,6 +80,8 @@ const Context = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         try self.updates.append(.{ .update = update, .time_ms = c.SDL_GetTicks64() - self.start });
+        if (update.action == .start) self.playback_started_at.store(c.SDL_GetTicks64(), .release);
+        if (update.action == .pause) self.pause_accepted_at.store(c.SDL_GetTicks64(), .release);
     }
 
     fn count(self: *Context, suffix: []const u8) usize {
@@ -88,12 +102,14 @@ export fn go_handheld_ui_ad_action(pointer: ?*anyopaque) c_int {
     const context: *Context = @ptrCast(@alignCast(pointer.?));
     const elapsed = c.SDL_GetTicks64() - context.start;
     if (elapsed > 20000 or (context.mode == .cancel and elapsed > 1000)) return -1;
-    if (context.mode == .pause) {
-        if (elapsed > 1400 and !context.paused) {
+    if (context.mode == .pause or context.mode == .slow_pause) {
+        const started = context.playback_started_at.load(.acquire);
+        const accepted = context.pause_accepted_at.load(.acquire);
+        if (started != 0 and c.SDL_GetTicks64() - started > 500 and !context.paused) {
             context.paused = true;
             return 1;
         }
-        if (elapsed > 2100 and !context.resumed) {
+        if (accepted != 0 and c.SDL_GetTicks64() - accepted > 700 and !context.resumed) {
             context.resumed = true;
             return 2;
         }
@@ -111,8 +127,10 @@ fn readFixture(path: []const u8, limit: usize) ![]u8 {
     return file.reader().readAllAlloc(allocator, limit);
 }
 
-fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8, image: []const u8, mode: Mode) !void {
-    var context = Context{ .media = media, .image = image, .mode = mode, .start = c.SDL_GetTicks64(), .updates = std.ArrayList(Recorded).init(allocator), .beacons = std.ArrayList([]u8).init(allocator) };
+fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8, short: []const u8, image: []const u8, mode: Mode) !void {
+    c.SDL_PauseAudioDevice(device, @intFromBool(mode != .audio_running));
+    const previous_audio_status = c.SDL_GetAudioDeviceStatus(device);
+    var context = Context{ .media = media, .short_media = short, .image = image, .mode = mode, .start = c.SDL_GetTicks64(), .updates = std.ArrayList(Recorded).init(allocator), .beacons = std.ArrayList([]u8).init(allocator) };
     defer {
         for (context.beacons.items) |address| allocator.free(address);
         context.beacons.deinit();
@@ -127,10 +145,19 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
         break :result null;
     };
     worker.deinit();
-    const success = mode == .play or mode == .pause or mode == .video_tail or mode == .pod;
+    try require(c.SDL_GetAudioDeviceStatus(device) == previous_audio_status);
+    const success = mode == .play or mode == .pause or mode == .slow_pause or mode == .audio_running or mode == .macros or mode == .tracker_failure or mode == .video_tail or mode == .pod;
     const no_fill = mode == .empty or mode == .wrapper_empty;
     try require(if (success or no_fill) failure == null else failure != null);
     if (mode == .truncated) try require(failure.? == error.AdMediaTruncated);
+    if (mode == .pod_truncated) {
+        try require(failure.? == error.AdMediaTruncated and playback.watched_ms == 8100);
+        try require(context.count("/error/405?at=00%3A00%3A03.100") == 1);
+    }
+    if (mode == .pod_download_failure) {
+        try require(failure.? == error.AdDownloadFailed and playback.watched_ms == 5000);
+        try require(context.count("/error/401?at=00%3A00%3A00.000") == 1);
+    }
     if (mode == .wrapper_loop) try require(failure.? == error.VastWrapperLimit);
     if (mode == .wrapper_invalid) {
         try require(failure.? == error.InvalidXml);
@@ -149,7 +176,7 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
             finishes += 1;
             const duration: u64 = if (mode == .pod) 10000 else 5000;
             try require(record.time_ms >= duration - 100 and record.update.watched_ms >= duration - 100 and record.update.watched_ms <= duration + 100);
-            if (mode == .pause) try require(record.update.paused_ms >= 500 and record.time_ms >= 5500);
+            if (mode == .pause or mode == .slow_pause) try require(record.update.paused_ms >= 700 and record.time_ms >= 5700);
         },
         .cancel => {
             cancels += 1;
@@ -169,11 +196,13 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
     if (success) {
         const ads_played: usize = if (mode == .pod) 2 else 1;
         try require(starts == 1 and milestones == 3 * ads_played);
-        for ([_][]const u8{ "/impression", "/start", "/quarter", "/half", "/three-quarter", "/complete", "/icon-view" }) |suffix|
-            try require(context.count(suffix) == ads_played);
+        for ([_][]const u8{ "/impression", "/start", "/quarter", "/half", "/three-quarter", "/complete", "/icon-view" }) |suffix| {
+            const expected = if (mode == .macros and std.mem.eql(u8, suffix, "/impression")) "/impression?asset=-1&custom=[VENDOR_TOKEN]" else suffix;
+            try require(context.count(expected) == ads_played);
+        }
         try require(context.count("/wrapper-view") == @intFromBool(mode != .pod));
-        if (mode == .pause) for ([_][]const u8{ "/pause", "/resume", "/icon-click" }) |suffix| try require(context.count(suffix) == 1);
-    } else try require(context.count("/complete") == 0);
+        if (mode == .pause or mode == .slow_pause) for ([_][]const u8{ "/pause", "/resume", "/icon-click" }) |suffix| try require(context.count(suffix) == 1);
+    } else try require(context.count("/complete") == @intFromBool(mode == .pod_truncated or mode == .pod_download_failure));
     std.debug.print("PASS ad playback: {s}, watched={d}ms paused={d}ms reports={d} beacons={d}\n", .{ @tagName(mode), playback.watched_ms, playback.paused_ms, context.updates.items.len, context.beacons.items.len });
 }
 
@@ -205,6 +234,6 @@ pub fn main() !void {
     const device = c.SDL_OpenAudioDevice(null, 0, &spec, null, 0);
     if (device == 0) return error.AudioUnavailable;
     defer c.SDL_CloseAudioDevice(device);
-    for ([_]Mode{ .play, .pause, .empty, .broken, .cancel, .truncated, .video_tail, .pod, .wrapper_empty, .wrapper_loop, .wrapper_invalid }) |mode|
-        try run(renderer, device, if (mode == .truncated) short else if (mode == .video_tail) tail else media, image, mode);
+    for (std.enums.values(Mode)) |mode|
+        try run(renderer, device, if (mode == .truncated) short else if (mode == .video_tail) tail else media, short, image, mode);
 }

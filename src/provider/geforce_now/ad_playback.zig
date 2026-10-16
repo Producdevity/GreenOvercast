@@ -125,13 +125,16 @@ pub const Playback = struct {
         for (pod.items) |ad| length += ad.creative.duration_ms;
         if (length > 120000) return error.AdPodTooLong;
         self.duration_ms = length;
-        for (pod.items, 0..) |ad, index| self.play(worker, ad, index == 0) catch |err| {
-            if (err != error.Cancelled) for (ad.metadata.errors) |address| {
-                try beacon(worker, storage, address, self.watched_ms, policy.errorCode(err));
+        for (pod.items, 0..) |ad, index| {
+            const prior = self.watched_ms;
+            self.play(worker, ad, index == 0) catch |err| {
+                if (err != error.Cancelled) for (ad.metadata.errors) |address| {
+                    try beacon(worker, storage, address, self.watched_ms - prior, policy.errorCode(err));
+                };
+                try self.drain(worker);
+                return err;
             };
-            try self.drain(worker);
-            return err;
-        };
+        }
         try self.event(worker, "ALL_ADS_COMPLETED");
         try worker.report(.{ .action = .finish, .watched_ms = self.watched_ms, .paused_ms = self.paused_ms, .duration_ms = self.duration_ms });
         try self.drain(worker);

@@ -40,6 +40,7 @@ pub const Player = struct {
     paused_at: ?u64 = null,
     paused_ms: u64 = 0,
     previous_yuv_mode: c.SDL_YUV_CONVERSION_MODE = c.SDL_YUV_CONVERSION_AUTOMATIC,
+    previous_audio_status: ?c.SDL_AudioStatus = null,
     last_audio_position: u64 = 0,
     last_audio_progress_at: u64 = 0,
     last_position: u64 = 0,
@@ -47,6 +48,8 @@ pub const Player = struct {
     pub fn start(self: *Player) !void {
         if (self.thread != null) return error.AlreadyPlaying;
         self.previous_yuv_mode = c.SDL_GetYUVConversionMode();
+        self.previous_audio_status = c.SDL_GetAudioDeviceStatus(self.device);
+        errdefer self.restoreDevice();
         c.SDL_PauseAudioDevice(self.device, 1);
         c.SDL_ClearQueuedAudio(self.device);
         self.thread = try std.Thread.spawn(.{}, worker, .{self});
@@ -248,11 +251,18 @@ pub const Player = struct {
             self.head = (self.head + 1) % queue_capacity;
             self.count -= 1;
         }
-        c.SDL_ClearQueuedAudio(self.device);
-        c.SDL_SetYUVConversionMode(self.previous_yuv_mode);
-        c.SDL_PauseAudioDevice(self.device, 0);
+        self.restoreDevice();
         if (self.texture) |texture| c.SDL_DestroyTexture(texture);
         self.texture = null;
+    }
+
+    fn restoreDevice(self: *Player) void {
+        if (self.previous_audio_status) |status| {
+            c.SDL_ClearQueuedAudio(self.device);
+            c.SDL_SetYUVConversionMode(self.previous_yuv_mode);
+            c.SDL_PauseAudioDevice(self.device, @intFromBool(status != c.SDL_AUDIO_PLAYING));
+            self.previous_audio_status = null;
+        }
     }
 };
 
