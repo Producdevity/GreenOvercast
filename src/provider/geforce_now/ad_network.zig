@@ -4,6 +4,7 @@ const protocol = @import("ad_protocol.zig");
 const c = @cImport({
     @cInclude("curl/curl.h");
     @cInclude("http_client.h");
+    @cInclude("stdlib.h");
 });
 
 pub const Reporter = struct {
@@ -243,6 +244,8 @@ fn get(allocator: std.mem.Allocator, address: []const u8, limit: usize, abort: *
         const handle = c.curl_easy_init() orelse return error.HttpUnavailable;
         defer c.curl_easy_cleanup(handle);
         if (c.curl_easy_setopt(handle, c.CURLOPT_URL, current.ptr) != c.CURLE_OK or
+            // The peer-address check must inspect the origin, not a proxy.
+            c.curl_easy_setopt(handle, c.CURLOPT_PROXY, @as([*:0]const u8, "")) != c.CURLE_OK or
             c.curl_easy_setopt(handle, c.CURLOPT_PROTOCOLS_STR, @as([*:0]const u8, "https")) != c.CURLE_OK or
             c.curl_easy_setopt(handle, c.CURLOPT_USERAGENT, @as([*:0]const u8, "GreenOvercast")) != c.CURLE_OK or
             c.curl_easy_setopt(handle, c.CURLOPT_TIMEOUT, timeout_seconds) != c.CURLE_OK or
@@ -302,6 +305,35 @@ test "ad connections reject local networks including IPv4 mapped IPv6" {
         try std.testing.expect(!publicIp(value));
     try std.testing.expect(publicIp("8.8.8.8"));
     try std.testing.expect(publicIp("2001:4860:4860::8888"));
+}
+
+test "ad transfers do not delegate destination resolution to environment proxies" {
+    const names = [_][:0]const u8{ "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY" };
+    var saved = [_]?[:0]u8{null} ** names.len;
+    defer for (names, saved) |name, value| {
+        if (value) |original| {
+            _ = c.setenv(name.ptr, original.ptr, 1);
+            std.testing.allocator.free(original);
+        } else _ = c.unsetenv(name.ptr);
+    };
+    for (names, &saved) |name, *value| {
+        if (c.getenv(name.ptr)) |original| value.* = try std.testing.allocator.dupeZ(u8, std.mem.span(original));
+    }
+    for (names) |name| try std.testing.expectEqual(@as(c_int, 0), c.unsetenv(name.ptr));
+    var trap = try (try std.net.Address.parseIp("127.0.0.1", 0)).listen(.{ .force_nonblocking = true });
+    defer trap.deinit();
+    const proxy = try std.fmt.allocPrintZ(std.testing.allocator, "http://127.0.0.1:{d}", .{trap.listen_address.getPort()});
+    defer std.testing.allocator.free(proxy);
+    var abort = std.atomic.Value(bool).init(false);
+    for (names[0..4]) |name| {
+        try std.testing.expectEqual(@as(c_int, 0), c.setenv(name.ptr, proxy.ptr, 1));
+        try std.testing.expectError(error.AdDownloadFailed, get(std.testing.allocator, "https://ad-proxy-test.invalid/", 1024, &abort, 1));
+        if (trap.accept()) |connection| {
+            connection.stream.close();
+            return error.AdTransferUsedProxy;
+        } else |err| try std.testing.expectEqual(error.WouldBlock, err);
+        try std.testing.expectEqual(@as(c_int, 0), c.unsetenv(name.ptr));
+    }
 }
 
 test "report queue is bounded and stop joins an in-flight fetch" {
