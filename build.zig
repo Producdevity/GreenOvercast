@@ -576,4 +576,12 @@ pub fn build(b: *std.Build) void {
     const run_mpp_decoder_test = b.addRunArtifact(mpp_decoder_test);
     run_mpp_decoder_test.addArtifactArg(fake_mpp_valid);
     test_step.dependOn(&run_mpp_decoder_test.step);
+
+    const bootstrap_tests = b.addTest(.{
+        .root_source_file = b.path("src/media/video/bootstrap_cache.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    addZigImport(b, bootstrap_tests.root_module, b.graph.host, .Debug, "h264_depacketizer", "src/media/rtp/h264_depacketizer.zig");
+    test_step.dependOn(&b.addRunArtifact(bootstrap_tests).step);
 }
