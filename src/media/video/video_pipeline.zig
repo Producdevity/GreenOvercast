@@ -1,4 +1,5 @@
 const std = @import("std");
+const bootstrap_cache = @import("bootstrap_cache.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -12,7 +13,7 @@ const c = @cImport({
     @cInclude("video_pipeline.h");
 });
 
-const bootstrap_capacity = 4104;
+const bootstrap_capacity = bootstrap_cache.capacity;
 const packet_capacity = 4096;
 const queue_capacity = 128;
 const backpressure_attempts = 64;
@@ -145,21 +146,21 @@ fn zSlice(buffer: []const u8) []const u8 {
 fn loadBootstrap(pipeline: *Pipeline) c_int {
     const path = zSlice(&pipeline.bootstrap_path);
     if (path.len == 0) return 0;
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        if (err != error.FileNotFound and debugEnabled())
-            std.debug.print("Ignoring unreadable H.264 bootstrap cache: {s}\n", .{@errorName(err)});
+    var data: [bootstrap_capacity + 1]u8 = undefined;
+    const cached = bootstrap_cache.read(std.fs.cwd(), path, &data) catch |err| {
+        if (debugEnabled()) switch (err) {
+            error.FileNotFound => {},
+            error.FileTooBig => std.debug.print("Ignoring oversized H.264 bootstrap cache (over {d} bytes)\n", .{bootstrap_capacity}),
+            else => std.debug.print("Ignoring unreadable H.264 bootstrap cache: {s}\n", .{@errorName(err)}),
+        };
         return 0;
     };
-    defer file.close();
-    const size = file.getEndPos() catch return 0;
-    if (size == 0 or size > bootstrap_capacity) return 0;
-    var data: [bootstrap_capacity]u8 = undefined;
-    file.reader().readNoEof(data[0..@intCast(size)]) catch return 0;
-    if (c.go_h264_depacketizer_set_bootstrap(pipeline.depacketizer, &data, @intCast(size)) != 0) {
+    if (cached.len == 0) return 0;
+    if (c.go_h264_depacketizer_set_bootstrap(pipeline.depacketizer, cached.ptr, cached.len) != 0) {
         if (debugEnabled()) std.debug.print("Ignoring invalid H.264 bootstrap cache\n", .{});
         return 0;
     }
-    if (debugEnabled()) std.debug.print("H.264 bootstrap loaded ({d} bytes)\n", .{size});
+    if (debugEnabled()) std.debug.print("H.264 bootstrap loaded ({d} bytes)\n", .{cached.len});
     return 0;
 }
 
