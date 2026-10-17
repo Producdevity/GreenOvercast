@@ -106,6 +106,12 @@ pub const Playback = struct {
         }
     }
 
+    fn drainAfterFailure(self: *Playback, worker: *network.Worker) !void {
+        self.drain(worker) catch |err| {
+            if (err == error.Cancelled) return err;
+        };
+    }
+
     fn run(self: *Playback, worker: *network.Worker) !void {
         c.go_handheld_ui_draw_loading(self.ui, "GEFORCE NOW", "LOADING ADVERTISEMENT", c.GO_HANDHELD_UI_ACTION_CANCEL);
         if (self.provider > 1) return error.UnsupportedAdProvider;
@@ -135,7 +141,7 @@ pub const Playback = struct {
                 if (err != error.Cancelled) for (ad.metadata.errors) |address| {
                     beacon(worker, storage, address, self.watched_ms - prior, policy.errorCode(err)) catch {};
                 };
-                self.drain(worker) catch {};
+                try self.drainAfterFailure(worker);
                 return err;
             };
         }
@@ -147,8 +153,7 @@ pub const Playback = struct {
 
     fn load(self: *Playback, worker: *network.Worker, documents: *std.ArrayList(vast.Manifest), pod: *std.ArrayList(Resolved), storage: std.mem.Allocator, url: []const u8, parent: ?Parent, depth: usize) !void {
         if (depth > 5 or documents.items.len == 32) {
-            if (parent) |previous| for (previous.metadata.errors) |address| try beacon(worker, storage, address, 0, 302);
-            try self.drain(worker);
+            try self.wrapperError(worker, storage, parent, 302);
             return error.VastWrapperLimit;
         }
         const bytes = self.fetch(worker, url, 1024 * 1024) catch |err| {
@@ -202,8 +207,8 @@ pub const Playback = struct {
 
     fn wrapperError(self: *Playback, worker: *network.Worker, storage: std.mem.Allocator, parent: ?Parent, code: u16) !void {
         if (parent) |previous| {
-            for (previous.metadata.errors) |address| try beacon(worker, storage, address, 0, code);
-            try self.drain(worker);
+            for (previous.metadata.errors) |address| beacon(worker, storage, address, 0, code) catch {};
+            try self.drainAfterFailure(worker);
         }
     }
 

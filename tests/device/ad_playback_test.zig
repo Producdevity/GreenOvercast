@@ -35,8 +35,19 @@ const pod_manifest = "<VAST><Ad sequence=\"2\">" ++
     "</Ad><Ad sequence=\"1\">" ++
     inline_manifest[10..media_offset] ++ media_url ++ "-1" ++ inline_manifest[media_offset + media_url.len .. inline_manifest.len - 12] ++ "</Ad></VAST>";
 
-const Mode = enum { play, pause, large_fallback, slow_pause, audio_running, macros, tracker_failure, cancel, broken, error_tracker_failure, error_report_failure, cancel_report_failure, empty, empty_report_failure, truncated, video_tail, pod, pod_truncated, pod_download_failure, wrapper_empty, wrapper_loop, wrapper_invalid };
+const Mode = enum { error_report_failure, drain_cancel, wrapper_invalid_error_tracker, wrapper_loop_error_tracker, play, pause, large_fallback, slow_pause, audio_running, macros, tracker_failure, cancel, broken, error_tracker_failure, cancel_report_failure, empty, empty_report_failure, truncated, video_tail, pod, pod_truncated, pod_download_failure, wrapper_empty, wrapper_loop, wrapper_invalid };
 const Recorded = struct { update: ads.protocol.Update, time_ms: u64 };
+
+fn prependOversizedError(storage: std.mem.Allocator, manifest: []const u8) ![]u8 {
+    var oversized: [8192]u8 = @splat('x');
+    const prefix = "https://example.invalid/";
+    @memcpy(oversized[0..prefix.len], prefix);
+    const macro = "[ADPLAYHEAD]";
+    @memcpy(oversized[oversized.len - macro.len ..], macro);
+    const error_at = std.mem.indexOf(u8, manifest, "<Error>").?;
+    return std.fmt.allocPrint(storage, "{s}<Error>{s}</Error>{s}", .{ manifest[0..error_at], oversized, manifest[error_at..] });
+}
+
 const Context = struct {
     media: []const u8,
     image: []const u8,
@@ -52,6 +63,7 @@ const Context = struct {
     media_reads: usize = 0,
     media_order: [2]u8 = .{ 0, 0 },
     error_beacon_started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    report_rejections: usize = 0,
     mutex: std.Thread.Mutex = .{},
     updates: std.ArrayList(Recorded),
     beacons: std.ArrayList([]u8),
@@ -59,31 +71,27 @@ const Context = struct {
     fn read(pointer: *anyopaque, storage: std.mem.Allocator, address: []const u8, _: usize, abort: *std.atomic.Value(bool)) ![]u8 {
         const self: *Context = @ptrCast(@alignCast(pointer));
         if (abort.load(.acquire)) return error.Cancelled;
-        if (std.mem.indexOf(u8, address, "/tag?") != null) return storage.dupe(u8, if (self.mode == .empty or self.mode == .empty_report_failure) "<VAST/>" else if (self.mode == .pod or self.mode == .pod_truncated or self.mode == .pod_download_failure) pod_manifest else wrapper_manifest);
+        if (std.mem.indexOf(u8, address, "/tag?") != null) {
+            if (self.mode == .wrapper_invalid_error_tracker or self.mode == .wrapper_loop_error_tracker) return prependOversizedError(storage, wrapper_manifest);
+            return storage.dupe(u8, if (self.mode == .empty or self.mode == .empty_report_failure) "<VAST/>" else if (self.mode == .pod or self.mode == .pod_truncated or self.mode == .pod_download_failure) pod_manifest else wrapper_manifest);
+        }
         if (std.mem.endsWith(u8, address, "/inline")) {
             if (self.mode == .macros) return std.mem.replaceOwned(u8, storage, inline_manifest, "/impression", "/impression?asset=[ASSETURI]&amp;custom=[VENDOR_TOKEN]");
             if (self.mode == .large_fallback) return std.mem.replaceOwned(u8, storage, inline_manifest, "<IconClickFallbackImage width=\"400\" height=\"150\"><StaticResource creativeType=\"image/png\">https://example.invalid/icon", "<IconClickFallbackImage width=\"1920\" height=\"1080\"><StaticResource creativeType=\"image/png\">https://example.invalid/panel");
-            if (self.mode == .error_tracker_failure) {
-                var oversized: [8192]u8 = @splat('x');
-                const prefix = "https://example.invalid/";
-                @memcpy(oversized[0..prefix.len], prefix);
-                const macro = "[ADPLAYHEAD]";
-                @memcpy(oversized[oversized.len - macro.len ..], macro);
-                const error_at = std.mem.indexOf(u8, inline_manifest, "<Error>").?;
-                return std.fmt.allocPrint(storage, "{s}<Error>{s}</Error>{s}", .{ inline_manifest[0..error_at], oversized, inline_manifest[error_at..] });
-            }
-            return storage.dupe(u8, if (self.mode == .wrapper_empty) "<VAST/>" else if (self.mode == .wrapper_loop) wrapper_manifest else if (self.mode == .wrapper_invalid) "<VAST><Ad>" else inline_manifest);
+            if (self.mode == .error_tracker_failure) return prependOversizedError(storage, inline_manifest);
+            return storage.dupe(u8, if (self.mode == .wrapper_empty) "<VAST/>" else if (self.mode == .wrapper_loop or self.mode == .wrapper_loop_error_tracker) wrapper_manifest else if (self.mode == .wrapper_invalid or self.mode == .wrapper_invalid_error_tracker) "<VAST><Ad>" else inline_manifest);
         }
         if (std.mem.endsWith(u8, address, "/media") or std.mem.endsWith(u8, address, "/media-1") or std.mem.endsWith(u8, address, "/media-2")) {
             if (self.media_reads < self.media_order.len) self.media_order[self.media_reads] = if (std.mem.endsWith(u8, address, "-1")) 1 else if (std.mem.endsWith(u8, address, "-2")) 2 else 0;
             self.media_reads += 1;
             if (self.mode == .slow_pause) c.SDL_Delay(1600);
             if (self.mode == .pod_download_failure and self.media_reads == 2) return error.AdDownloadFailed;
-            return storage.dupe(u8, if (self.mode == .broken or self.mode == .error_tracker_failure or self.mode == .error_report_failure or self.mode == .cancel_report_failure) "not an MP4" else if (self.mode == .pod_truncated and self.media_reads == 2) self.short_media else self.media);
+            return storage.dupe(u8, if (self.mode == .broken or self.mode == .error_tracker_failure or self.mode == .error_report_failure or self.mode == .cancel_report_failure or self.mode == .drain_cancel) "not an MP4" else if (self.mode == .pod_truncated and self.media_reads == 2) self.short_media else self.media);
         }
         if (std.mem.endsWith(u8, address, "/icon")) return storage.dupe(u8, self.image);
         if (std.mem.endsWith(u8, address, "/panel")) return storage.dupe(u8, self.fallback_image);
-        if (self.mode == .error_report_failure) self.error_beacon_started.store(true, .release);
+        if (self.mode == .error_report_failure or self.mode == .drain_cancel) self.error_beacon_started.store(true, .release);
+        if (self.mode == .drain_cancel) c.SDL_Delay(100);
         self.mutex.lock();
         defer self.mutex.unlock();
         const owned = try storage.dupe(u8, address);
@@ -105,6 +113,7 @@ const Context = struct {
         if (self.mode == .error_report_failure and update.action == .event) {
             const until = c.SDL_GetTicks64() + 2000;
             while (!self.error_beacon_started.load(.acquire) and c.SDL_GetTicks64() < until) c.SDL_Delay(1);
+            self.report_rejections += 1;
             return error.AdReportRejected;
         }
         if ((self.mode == .cancel_report_failure or self.mode == .empty_report_failure) and update.action == .cancel) return error.AdReportRejected;
@@ -119,8 +128,9 @@ const Context = struct {
     }
 };
 
-export fn go_handheld_ui_cancel_requested(_: ?*anyopaque) c_int {
-    return 0;
+export fn go_handheld_ui_cancel_requested(pointer: ?*anyopaque) c_int {
+    const context: *Context = @ptrCast(@alignCast(pointer.?));
+    return @intFromBool(context.mode == .drain_cancel and context.error_beacon_started.load(.acquire));
 }
 export fn go_handheld_ui_draw_loading(_: ?*anyopaque, _: [*:0]const u8, _: [*:0]const u8, _: c_int) void {}
 export fn go_handheld_ui_draw_ad_hint(_: ?*anyopaque, _: c_int) void {}
@@ -177,6 +187,8 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
     try require(if (success or no_fill) failure == null else failure != null);
     if (mode == .truncated) try require(failure.? == error.AdMediaTruncated);
     if (mode == .broken or mode == .error_tracker_failure or mode == .error_report_failure or mode == .cancel_report_failure) try require(failure.? == error.InvalidMp4);
+    if (mode == .error_report_failure) try require(context.report_rejections == 1);
+    if (mode == .drain_cancel) try require(failure.? == error.Cancelled);
     if (mode == .empty_report_failure) try require(failure.? == error.AdReportRejected);
     if (mode == .error_tracker_failure) try require(context.count("/error/405?at=00%3A00%3A00.000") == 1);
     if (mode == .pod or mode == .pod_truncated or mode == .pod_download_failure) try require(std.mem.eql(u8, &context.media_order, &.{ 1, 2 }));
@@ -199,8 +211,8 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
         try require(failure.? == error.AdDownloadFailed and playback.watched_ms >= 4998 and playback.watched_ms <= 5000);
         try require(context.count("/error/401?at=00%3A00%3A00.000") == 1);
     }
-    if (mode == .wrapper_loop) try require(failure.? == error.VastWrapperLimit);
-    if (mode == .wrapper_invalid) {
+    if (mode == .wrapper_loop or mode == .wrapper_loop_error_tracker) try require(failure.? == error.VastWrapperLimit);
+    if (mode == .wrapper_invalid or mode == .wrapper_invalid_error_tracker) {
         try require(failure.? == error.InvalidXml);
         try require(context.count("/wrapper-error/100") == 1);
     }
@@ -221,6 +233,7 @@ fn run(renderer: *c.SDL_Renderer, device: c.SDL_AudioDeviceID, media: []const u8
         },
         .cancel => {
             cancels += 1;
+            if (mode == .drain_cancel) try require(std.mem.eql(u8, record.update.reason.?, "USER_CANCELLED"));
             if (mode == .empty) try require(record.update.watched_ms == 0 and
                 std.mem.eql(u8, record.update.reason.?, "VAST_EMPTY_RESPONSE"));
             if (mode == .wrapper_empty) try require(record.update.watched_ms == 0 and
