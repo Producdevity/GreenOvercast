@@ -112,7 +112,7 @@ pub fn writeCString(destination: []u8, text: []const u8) bool {
     return true;
 }
 
-fn writeDisplayCString(destination: []u8, text: []const u8) bool {
+pub fn writeDisplayCString(destination: []u8, text: []const u8) bool {
     @memset(destination, 0);
     var source_index: usize = 0;
     var destination_index: usize = 0;

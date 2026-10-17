@@ -38,7 +38,7 @@ fn stage(result: release_mod.Result) enum { ok, cancelled, failed } {
     };
 }
 
-const CatalogFlow = enum { ok, cancelled, failed };
+const CatalogFlow = enum { ok, cancelled, change_provider, failed };
 
 fn openCatalog(
     release: *release_mod.Release,
@@ -72,10 +72,11 @@ fn openCatalog(
         }
         break;
     }
-    switch (stage(release.loadCatalog())) {
+    switch (release.loadCatalog()) {
         .ok => if (!move(state, .catalog_loaded, .catalog)) return .failed,
         .cancelled => return .cancelled,
-        .failed => return .failed,
+        .change_provider => return .change_provider,
+        else => return .failed,
     }
     return .ok;
 }
@@ -111,52 +112,84 @@ pub fn main() u8 {
     const release = release_mod.Release.open(requested_title) orelse return 1;
     defer release.close();
 
-    var state = state_mod.State.cold_start;
-    var needs_sign_in = false;
-    const credentials = release.loadCredentials();
-    if (credentials == .missing_credentials) {
-        if (!move(&state, .auth_no_tokens, .signed_out)) return 1;
-        needs_sign_in = true;
-    } else if (credentials == .ok) {
-        if (!move(&state, .auth_tokens_found, .authenticating)) return 1;
-    } else {
-        return finish(&state, 1);
+    switch (stage(release.selectProvider())) {
+        .ok => {},
+        .cancelled => return 0,
+        .failed => return 1,
     }
 
-    switch (openCatalog(release, &state, needs_sign_in)) {
-        .ok => {},
-        .cancelled => return finish(&state, 0),
-        .failed => return finish(&state, 1),
-    }
-    while (true) {
-        const selection = release.pickTitle();
-        if (selection == .signed_out) {
-            if (release.signOut() != .ok or !move(&state, .auth_sign_out, .signed_out))
-                return finish(&state, 1);
-            switch (openCatalog(release, &state, true)) {
-                .ok => continue,
+    var state = state_mod.State.cold_start;
+    provider_loop: while (true) {
+        var needs_sign_in = false;
+        const credentials = release.loadCredentials();
+        if (credentials == .missing_credentials) {
+            if (!move(&state, .auth_no_tokens, .signed_out)) return 1;
+            needs_sign_in = true;
+        } else if (credentials == .ok) {
+            if (!move(&state, .auth_tokens_found, .authenticating)) return 1;
+        } else {
+            return finish(&state, 1);
+        }
+
+        switch (openCatalog(release, &state, needs_sign_in)) {
+            .ok => {},
+            .change_provider => {
+                if (!move(&state, .provider_changed, .cold_start)) return 1;
+                switch (stage(release.returnToProviderPicker())) {
+                    .ok => continue :provider_loop,
+                    .cancelled => return finish(&state, 0),
+                    .failed => return finish(&state, 1),
+                }
+            },
+            .cancelled => return finish(&state, 0),
+            .failed => return finish(&state, 1),
+        }
+        catalog_loop: while (true) {
+            const selection = release.pickTitle();
+            if (selection == .change_provider) {
+                if (!move(&state, .provider_changed, .cold_start)) return 1;
+                switch (stage(release.switchProvider())) {
+                    .ok => continue :provider_loop,
+                    .cancelled => return finish(&state, 0),
+                    .failed => return finish(&state, 1),
+                }
+            }
+            if (selection == .signed_out) {
+                if (release.signOut() != .ok or !move(&state, .auth_sign_out, .signed_out))
+                    return finish(&state, 1);
+                switch (openCatalog(release, &state, true)) {
+                    .ok => continue :catalog_loop,
+                    .change_provider => {
+                        if (!move(&state, .provider_changed, .cold_start)) return 1;
+                        switch (stage(release.returnToProviderPicker())) {
+                            .ok => continue :provider_loop,
+                            .cancelled => return finish(&state, 0),
+                            .failed => return finish(&state, 1),
+                        }
+                    },
+                    .cancelled => return finish(&state, 0),
+                    .failed => return finish(&state, 1),
+                }
+            }
+            switch (stage(selection)) {
+                .ok => if (!move(&state, .user_select_title, .provisioning)) return 1,
                 .cancelled => return finish(&state, 0),
                 .failed => return finish(&state, 1),
             }
-        }
-        switch (stage(selection)) {
-            .ok => if (!move(&state, .user_select_title, .provisioning)) return 1,
-            .cancelled => return finish(&state, 0),
-            .failed => return finish(&state, 1),
-        }
 
-        const outcome = runSelectedSession(release, &state);
-        if (outcome == .cancelled) return finish(&state, 0);
-
-        const return_event: state_mod.Event = if (outcome == .session_ended or outcome == .ok)
-            .session_ended
-        else
-            .session_failed;
-        switch (stage(release.resetSession())) {
-            .ok => {},
-            .cancelled => return finish(&state, 0),
-            .failed => return finish(&state, 1),
+            const outcome = runSelectedSession(release, &state);
+            const return_event: state_mod.Event = switch (outcome) {
+                .cancelled => state_mod.sessionCancellation(state, release.quitRequested()),
+                .session_ended, .ok => .session_ended,
+                else => .session_failed,
+            };
+            if (return_event == .user_quit) return finish(&state, 0);
+            switch (stage(release.resetSession())) {
+                .ok => {},
+                .cancelled => return finish(&state, 0),
+                .failed => return finish(&state, 1),
+            }
+            if (!move(&state, return_event, .catalog)) return 1;
         }
-        if (!move(&state, return_event, .catalog)) return 1;
     }
 }

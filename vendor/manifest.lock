@@ -42,7 +42,15 @@ commit = "c08762ebfadeb4e986d2fed993bc7a54862d3ebe"
 license = "Apache-2.0 and MIT"
 linkage = "dynamic optional decoder plugin; firmware MPP preferred when compatible"
 build = "git submodule headers and private userspace library; tools/build-dependencies.sh and build.zig"
-status = "live cloud playback proven on RK3566 SpruceOS 4.2.0 and RK3326 AmberELEC prerelease-20250515; RK3326 dArkOS 4.4 offline 720p decode and frontend startup also proven"
+status = "live cloud playback proven on RK3566 SpruceOS 4.2.0/4.3.3 and RK3326 AmberELEC prerelease-20250515; GFN gameplay tested on RK3326 dArkOS 02012026, with uneven render cadence"
+
+[asset.provider_icons]
+source = "https://github.com/twbs/icons"
+commit = "6945b7006285d444cc17ff2e22c7691719229526"
+license = "MIT"
+nvidia_svg_sha256 = "3e1027070f7db94347d631ebf6299cc01a3e813610af743506f5acc1257aef81"
+xbox_svg_sha256 = "e73c5df7997cfec0f6deed44c8a160bb649af865789cafd688db9bedaaf42e1a"
+build = "icons/nvidia.svg and icons/xbox.svg rasterized to 24x24 alpha masks in src/ui/provider_badge.zig"
 
 [dep.libdatachannel]
 version = "v0.24.3"
@@ -65,7 +73,7 @@ version = "8.20.0"
 source = "https://curl.se/download/curl-8.20.0.tar.xz"
 sha256 = "63fe2dc148ba0ceae89922ef838f7e5c946272c2e78b7c59fab4b79d3ce2b896"
 license = "curl (MIT-style)"
-linkage = "static; HTTP and HTTPS only"
+linkage = "static; HTTP, HTTPS, and WebSocket"
 status = "source-built by tools/build-dependencies.sh"
 
 [dep.ffmpeg]
@@ -73,9 +81,26 @@ version = "9.0"
 source = "https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz"
 sha256 = "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52"
 license = "LGPLv2.1-or-later"
-linkage = "dynamic private libavcodec, libavutil, and libswscale"
-build = "H.264 and MJPEG decoders, H.264 parser, and H.264 V4L2 request hwaccel; no programs, network support, GPL, or nonfree components"
+linkage = "dynamic private libavcodec, libavformat, libavutil, libswresample, and libswscale"
+build = "H.264, MJPEG, PNG, and AAC decoders; MP4 demuxer; H.264 parser and V4L2 request hwaccel; no programs, network support, GPL, or nonfree components"
 status = "source-built by tools/build-dependencies.sh and shipped with the port"
+
+[dep.expat]
+version = "2.8.5"
+source = "https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz"
+sha256 = "1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182"
+license = "MIT"
+linkage = "static"
+build = "XML parser with DTD support disabled"
+status = "source-built by tools/build-dependencies.sh"
+
+[dep.zlib]
+version = "1.3.2"
+source = "https://zlib.net/zlib-1.3.2.tar.gz"
+sha256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+license = "Zlib"
+linkage = "static into FFmpeg"
+status = "source-built by tools/build-dependencies.sh"
 
 [dep.ffmpeg_v4l2_request]
 source = "https://raw.githubusercontent.com/ROCKNIX/distribution/e9e6b8531df13bc9058ca1771dab5f0c4fd5e98e/packages/multimedia/ffmpeg/patches/v4l2-request/0001-v4l2-request.patch"

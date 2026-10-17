@@ -13,6 +13,8 @@ typedef struct {
 
 int go_artwork_decode_jpeg(const uint8_t* data, size_t length, int max_width, int max_height,
                            GoArtworkImage* output);
+int go_artwork_decode_rgba(const uint8_t* data, size_t length, int max_width, int max_height,
+                           GoArtworkImage* output);
 void go_artwork_image_destroy(GoArtworkImage* image);
 
 #endif

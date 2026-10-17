@@ -19,6 +19,7 @@ CXX_WRAPPER="$CROSS/c++"
 AR_WRAPPER="$CROSS/ar"
 RANLIB_WRAPPER="$CROSS/ranlib"
 TOOLCHAIN="$CROSS/toolchain.cmake"
+CLANG_CONFIG="$CROSS/clang.cfg"
 LIBDATACHANNEL_SOURCE="$ROOT/vendor/libdatachannel"
 LIBDATACHANNEL_BUILD="$TOOLS/build/libdatachannel-aarch64-release"
 LIBDATACHANNEL_COMMIT=c6696d157b5612df2a741d9a03b192b47ab6cefb
@@ -32,7 +33,7 @@ MPP_COMMIT=c08762ebfadeb4e986d2fed993bc7a54862d3ebe
   exit 1
 }
 
-for command_name in cmake curl make patch perl python3 tar; do
+for command_name in cmake curl make patch perl pkg-config python3 tar; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "missing build tool: $command_name" >&2
     exit 1
@@ -41,17 +42,24 @@ done
 
 mkdir -p "$DOWNLOADS" "$SOURCES" "$BUILDS" "$PREFIX" "$CROSS" "$TOOLS/cache/zig"
 
+# pkg-config's host search paths are independent of CMake's find root.
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig"
+export PKG_CONFIG_PATH=
+export PKG_CONFIG_SYSROOT_DIR=
+
 write_wrapper() {
   wrapper=$1
   driver=$2
   {
     printf '%s\n' '#!/bin/sh'
-    printf 'exec "%s" %s -target aarch64-linux-gnu.2.38 -ffile-prefix-map="%s"=. "$@"\n' \
-      "$ZIG" "$driver" "$ROOT"
+    printf 'exec "%s" %s -target aarch64-linux-gnu.2.38 -ffile-prefix-map="%s"=. "$@" -mno-outline-atomics --config="%s"\n' \
+      "$ZIG" "$driver" "$ROOT" "$CLANG_CONFIG"
   } >"$wrapper"
   chmod +x "$wrapper"
 }
 
+# Zig 0.14.1 consumes -m flags before Clang applies its Linux defaults.
+printf '%s\n' '-mno-outline-atomics' >"$CLANG_CONFIG"
 write_wrapper "$CC_WRAPPER" cc
 write_wrapper "$CXX_WRAPPER" c++
 {
@@ -77,6 +85,10 @@ chmod +x "$AR_WRAPPER" "$RANLIB_WRAPPER"
   printf '%s\n' 'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)'
   printf '%s\n' 'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)'
   printf '%s\n' 'set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)'
+  printf 'set(ENV{PKG_CONFIG_LIBDIR} "%s")\n' "$PKG_CONFIG_LIBDIR"
+  printf '%s\n' 'set(ENV{PKG_CONFIG_PATH} "")'
+  printf '%s\n' 'set(ENV{PKG_CONFIG_SYSROOT_DIR} "")'
+  printf '%s\n' 'set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH FALSE)'
 } >"$TOOLCHAIN"
 
 if [ "${1:-}" = "--toolchain-only" ]; then
@@ -102,6 +114,19 @@ actual_mpp_commit=$(git -C "$MPP_SOURCE" rev-parse HEAD)
   echo "Rockchip MPP must be at $MPP_COMMIT (found $actual_mpp_commit)" >&2
   exit 1
 }
+
+# Compiler flags are not part of the per-library completion stamps. Invalidate
+# both build trees and installed libraries when the generated toolchain changes.
+toolchain_signature=$(cksum "$CC_WRAPPER" "$CXX_WRAPPER" "$TOOLCHAIN" "$CLANG_CONFIG")
+cached_signature=
+if [ -f "$BUILDS/.toolchain-signature" ]; then
+  cached_signature=$(cat "$BUILDS/.toolchain-signature")
+fi
+if [ "$cached_signature" != "$toolchain_signature" ]; then
+  rm -rf "$BUILDS" "$LIBDATACHANNEL_BUILD" "$MPP_BUILD" "$PREFIX"
+  mkdir -p "$BUILDS" "$PREFIX"
+  printf '%s\n' "$toolchain_signature" >"$BUILDS/.toolchain-signature"
+fi
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -178,6 +203,12 @@ fetch_source libdrm-2.4.128.tar.xz libdrm-2.4.128 \
 fetch_source SDL2-2.28.5.tar.gz SDL2-2.28.5 \
   https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz \
   332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4
+fetch_source zlib-1.3.2.tar.gz zlib-1.3.2 \
+  https://zlib.net/zlib-1.3.2.tar.gz \
+  bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+fetch_source expat-2.8.5.tar.xz expat-2.8.5 \
+  https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz \
+  1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182
 
 export ZIG_GLOBAL_CACHE_DIR="$TOOLS/cache/zig"
 export SOURCE_DATE_EPOCH=0
@@ -221,8 +252,8 @@ if [ ! -f "$BUILDS/.opus-1.6.1-static" ]; then
   : >"$BUILDS/.opus-1.6.1-static"
 fi
 
-if [ ! -f "$BUILDS/.curl-8.20.0-static-http" ]; then
-  curl_build="$BUILDS/curl-8.20.0-static-http"
+if [ ! -f "$BUILDS/.curl-8.20.0-static-http-ws" ]; then
+  curl_build="$BUILDS/curl-8.20.0-static-http-ws"
   cmake -S "$SOURCES/curl-8.20.0" -B "$curl_build" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -232,7 +263,22 @@ if [ ! -f "$BUILDS/.curl-8.20.0-static-http" ]; then
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_STATIC_LIBS=ON \
     -DBUILD_TESTING=OFF \
-    -DHTTP_ONLY=ON \
+    -DHTTP_ONLY=OFF \
+    -DCURL_DISABLE_WEBSOCKETS=OFF \
+    -DCURL_DISABLE_DICT=ON \
+    -DCURL_DISABLE_FILE=ON \
+    -DCURL_DISABLE_FTP=ON \
+    -DCURL_DISABLE_GOPHER=ON \
+    -DCURL_DISABLE_IMAP=ON \
+    -DCURL_DISABLE_IPFS=ON \
+    -DCURL_DISABLE_LDAP=ON \
+    -DCURL_DISABLE_LDAPS=ON \
+    -DCURL_DISABLE_MQTT=ON \
+    -DCURL_DISABLE_POP3=ON \
+    -DCURL_DISABLE_RTSP=ON \
+    -DCURL_DISABLE_SMTP=ON \
+    -DCURL_DISABLE_TELNET=ON \
+    -DCURL_DISABLE_TFTP=ON \
     -DCURL_USE_OPENSSL=ON \
     -DOPENSSL_ROOT_DIR="$PREFIX" \
     -DOPENSSL_USE_STATIC_LIBS=ON \
@@ -252,12 +298,12 @@ if [ ! -f "$BUILDS/.curl-8.20.0-static-http" ]; then
     -DCURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
   cmake --build "$curl_build" --parallel
   cmake --install "$curl_build"
-  : >"$BUILDS/.curl-8.20.0-static-http"
+  : >"$BUILDS/.curl-8.20.0-static-http-ws"
 fi
 
-if [ ! -f "$BUILDS/.sdl2-2.28.5-link" ]; then
+if [ ! -f "$BUILDS/.sdl2-2.28.5-link-v2" ]; then
   sdl_build="$BUILDS/SDL2-2.28.5-link"
-  cmake -S "$SOURCES/SDL2-2.28.5" -B "$sdl_build" \
+  cmake --fresh -S "$SOURCES/SDL2-2.28.5" -B "$sdl_build" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_INSTALL_LIBDIR=lib \
@@ -283,7 +329,7 @@ if [ ! -f "$BUILDS/.sdl2-2.28.5-link" ]; then
     -DSDL_FCITX=OFF
   cmake --build "$sdl_build" --parallel
   cmake --install "$sdl_build"
-  : >"$BUILDS/.sdl2-2.28.5-link"
+  : >"$BUILDS/.sdl2-2.28.5-link-v2"
 fi
 
 if [ ! -f "$BUILDS/.libudev-zero-1.0.3-static" ]; then
@@ -305,22 +351,49 @@ if [ ! -f "$BUILDS/.libdrm-2.4.128-v4l2-headers" ]; then
   : >"$BUILDS/.libdrm-2.4.128-v4l2-headers"
 fi
 
-if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
-  ffmpeg_build="$BUILDS/ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+if [ ! -f "$BUILDS/.zlib-1.3.2-static" ]; then
+  zlib_build="$BUILDS/zlib-1.3.2-static"
+  cmake -S "$SOURCES/zlib-1.3.2" -B "$zlib_build" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release \
+    -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
+  cmake --build "$zlib_build" --parallel
+  cmake --install "$zlib_build"
+  : >"$BUILDS/.zlib-1.3.2-static"
+fi
+
+if [ ! -f "$BUILDS/.expat-2.8.5-static" ]; then
+  expat_build="$BUILDS/expat-2.8.5-static"
+  cmake -S "$SOURCES/expat-2.8.5" -B "$expat_build" \
+    -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_BUILD_TYPE=Release -DEXPAT_SHARED_LIBS=OFF -DEXPAT_DTD=OFF \
+    -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF
+  cmake --build "$expat_build" --parallel
+  cmake --install "$expat_build"
+  : >"$BUILDS/.expat-2.8.5-static"
+fi
+
+if [ ! -f "$BUILDS/.ffmpeg-9.0-mp4-vast-v4l2-request-shared" ]; then
+  ffmpeg_build="$BUILDS/ffmpeg-9.0-mp4-vast-v4l2-request-shared"
   ffmpeg_source="$BUILDS/ffmpeg-9.0"
   ffmpeg_request_patch="$DOWNLOADS/ffmpeg-9.0-v4l2-request.patch"
   ffmpeg_portable_patch="$ROOT/vendor/patches/ffmpeg-9.0-v4l2-request-portable.patch"
-  rm -rf "$ffmpeg_build" "$ffmpeg_source"
-  mkdir -p "$ffmpeg_build"
+  ffmpeg_patch_dir="$BUILDS/ffmpeg-9.0-patches"
+  rm -rf "$ffmpeg_build" "$ffmpeg_source" "$ffmpeg_patch_dir"
+  mkdir -p "$ffmpeg_build" "$ffmpeg_patch_dir"
   tar -xf "$DOWNLOADS/ffmpeg-9.0.tar.xz" -C "$BUILDS"
-  patch -d "$ffmpeg_source" -p1 <"$ffmpeg_request_patch"
+  # Later mailbox patches depend on edits made by earlier patches.
+  git mailsplit -o"$ffmpeg_patch_dir" "$ffmpeg_request_patch"
+  for request_patch in "$ffmpeg_patch_dir"/*; do
+    patch -d "$ffmpeg_source" -p1 <"$request_patch"
+  done
   patch -d "$ffmpeg_source" -p1 <"$ffmpeg_portable_patch"
   find "$ffmpeg_source" -name '*.orig' -delete
   nm_tool=$(command -v llvm-nm || command -v nm)
   (
     cd "$ffmpeg_build"
     env -u CPPFLAGS -u CFLAGS -u CXXFLAGS -u LDFLAGS \
-      PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
       "$ffmpeg_source/configure" \
       --prefix="$PREFIX" \
       --arch=aarch64 \
@@ -338,10 +411,17 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
       --disable-all \
       --enable-avcodec \
       --enable-avutil \
+      --enable-avformat \
+      --enable-swresample \
       --enable-swscale \
       --enable-decoder=h264 \
       --enable-decoder=mjpeg \
+      --enable-decoder=aac \
+      --enable-decoder=png \
       --enable-parser=h264 \
+      --enable-parser=aac \
+      --enable-demuxer=mov \
+      --enable-zlib \
       --enable-v4l2-request \
       --enable-libudev \
       --disable-libdrm \
@@ -353,12 +433,12 @@ if [ ! -f "$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared" ]; then
       --disable-doc \
       --disable-debug \
       --disable-stripping \
-      --extra-cflags="-O3 -I$PREFIX/include/libdrm -ffile-prefix-map=$ROOT=." \
+      --extra-cflags="-O3 -I$PREFIX/include -I$PREFIX/include/libdrm -ffile-prefix-map=$ROOT=." \
       --extra-ldflags="-L$PREFIX/lib"
     make -j4
     make install-libs install-headers
   )
-  : >"$BUILDS/.ffmpeg-9.0-h264-mjpeg-v4l2-request-shared"
+  : >"$BUILDS/.ffmpeg-9.0-mp4-vast-v4l2-request-shared"
 fi
 
 if [ ! -f "$LIBDATACHANNEL_BUILD/.greenovercast-$LIBDATACHANNEL_COMMIT" ]; then

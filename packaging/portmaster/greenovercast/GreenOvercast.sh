@@ -57,6 +57,9 @@ chmod 700 "$credential_dir" || fail "Unable to protect GreenOvercast's private s
 
 credential_file="$credential_dir/tokens.bin"
 credential_key_file="$credential_dir/tokens.key"
+gfn_credential_file="$credential_dir/geforce-now-tokens.bin"
+gfn_credential_key_file="$credential_dir/geforce-now-tokens.key"
+gfn_device_id_file="$credential_dir/geforce-now-device-id"
 video_bootstrap_file="$credential_dir/h264-parameter-sets.bin"
 catalog_file="$credential_dir/catalog.tsv"
 settings_file="$config_dir/settings.tsv"
@@ -66,7 +69,9 @@ log_file="$credential_dir/greenovercast.log"
 chmod 600 "$log_file"
 exec > >(tee "$log_file") 2>&1
 
-for private_file in "$credential_file" "$credential_key_file" "$catalog_file"; do
+for private_file in "$credential_file" "$credential_key_file" \
+  "$gfn_credential_file" "$gfn_credential_key_file" "$gfn_device_id_file" \
+  "$catalog_file"; do
   [ ! -e "$private_file" ] || chmod 600 "$private_file"
 done
 
@@ -78,6 +83,13 @@ fi
 
 export GREENOVERCAST_TOKEN_FILE="$credential_file"
 export GREENOVERCAST_TOKEN_KEY_FILE="$credential_key_file"
+export GREENOVERCAST_GFN_TOKEN_FILE="$gfn_credential_file"
+export GREENOVERCAST_GFN_TOKEN_KEY_FILE="$gfn_credential_key_file"
+export GREENOVERCAST_GFN_DEVICE_ID_FILE="$gfn_device_id_file"
+[ ! -f "$config_dir/geforce-now-oauth-client-id" ] ||
+  export GREENOVERCAST_GFN_CLIENT_ID_FILE="$config_dir/geforce-now-oauth-client-id"
+[ ! -f "$config_dir/geforce-now-protocol-client-id" ] ||
+  export GREENOVERCAST_GFN_PROTOCOL_CLIENT_ID_FILE="$config_dir/geforce-now-protocol-client-id"
 export GREENOVERCAST_H264_BOOTSTRAP_FILE="$video_bootstrap_file"
 export GREENOVERCAST_CATALOG_FILE="$catalog_file"
 export GREENOVERCAST_SETTINGS_FILE="$settings_file"

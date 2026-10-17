@@ -24,6 +24,7 @@ typedef struct {
 GoAudioPipeline* go_audio_pipeline_create(SDL_AudioDeviceID device);
 int go_audio_pipeline_start(GoAudioPipeline* pipeline);
 void go_audio_pipeline_stop(GoAudioPipeline* pipeline);
+int go_audio_pipeline_set_payload_type(GoAudioPipeline* pipeline, int payload_type);
 void go_audio_pipeline_push_rtp(GoAudioPipeline* pipeline, const uint8_t* packet, size_t length);
 GoAudioStats go_audio_pipeline_stats(GoAudioPipeline* pipeline);
 void go_audio_pipeline_destroy(GoAudioPipeline* pipeline);

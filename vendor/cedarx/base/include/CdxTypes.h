@@ -18,6 +18,8 @@
 #ifndef CDX_TYPES_H
 #define CDX_TYPES_H
 
+#include <stddef.h>
+
 #ifdef NULL
 #undef NULL
 #endif
@@ -63,7 +65,7 @@ typedef cdx_int32 cdx_err;
 #define CDX_TRUE 1
 #define CDX_FALSE 0
 
-#define CdxOffsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER) 
+#define CdxOffsetof(TYPE, MEMBER) offsetof(TYPE, MEMBER)
 
 #define CdxContainerOf(ptr, type, member) ({ \
     const typeof(((type *)0)->member) *__mptr = (ptr); \

@@ -223,6 +223,51 @@ pub export fn go_controller_input_axis(
     return axis(input orelse return 0, controller_axis);
 }
 
+pub export fn go_controller_input_sample(input: ?*Input, state: ?*c.GoControllerState) c_int {
+    const handle = input orelse return 0;
+    const output = state orelse return 0;
+    if (handle.controller == null) return 0;
+
+    var buttons: u32 = 0;
+    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_A)) buttons |= c.GO_CONTROLLER_BUTTON_A;
+    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_B)) buttons |= c.GO_CONTROLLER_BUTTON_B;
+    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_X)) buttons |= c.GO_CONTROLLER_BUTTON_X;
+    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_Y)) buttons |= c.GO_CONTROLLER_BUTTON_Y;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) buttons |= c.GO_CONTROLLER_BUTTON_LEFT_SHOULDER;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) buttons |= c.GO_CONTROLLER_BUTTON_RIGHT_SHOULDER;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_BACK)) buttons |= c.GO_CONTROLLER_BUTTON_BACK;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_START)) buttons |= c.GO_CONTROLLER_BUTTON_START;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_UP)) buttons |= c.GO_CONTROLLER_BUTTON_DPAD_UP;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_DOWN)) buttons |= c.GO_CONTROLLER_BUTTON_DPAD_DOWN;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_LEFT)) buttons |= c.GO_CONTROLLER_BUTTON_DPAD_LEFT;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) buttons |= c.GO_CONTROLLER_BUTTON_DPAD_RIGHT;
+
+    const stick_buttons = handle.guide_chord.update(
+        button(handle, c.SDL_CONTROLLER_BUTTON_LEFTSTICK),
+        button(handle, c.SDL_CONTROLLER_BUTTON_RIGHTSTICK),
+    );
+    const guide_chord_active = stick_buttons.left and stick_buttons.right;
+    if (button(handle, c.SDL_CONTROLLER_BUTTON_GUIDE) or guide_chord_active)
+        buttons |= c.GO_CONTROLLER_BUTTON_GUIDE;
+    if (!guide_chord_active) {
+        if (stick_buttons.left) buttons |= c.GO_CONTROLLER_BUTTON_LEFT_STICK;
+        if (stick_buttons.right) buttons |= c.GO_CONTROLLER_BUTTON_RIGHT_STICK;
+    }
+
+    const raw_left_y = axis(handle, c.SDL_CONTROLLER_AXIS_LEFTY);
+    const raw_right_y = axis(handle, c.SDL_CONTROLLER_AXIS_RIGHTY);
+    output.* = .{
+        .buttons = buttons,
+        .left_x = axis(handle, c.SDL_CONTROLLER_AXIS_LEFTX),
+        .left_y = if (raw_left_y == std.math.minInt(i16)) std.math.maxInt(i16) else -raw_left_y,
+        .right_x = axis(handle, c.SDL_CONTROLLER_AXIS_RIGHTX),
+        .right_y = if (raw_right_y == std.math.minInt(i16)) std.math.maxInt(i16) else -raw_right_y,
+        .left_trigger = trigger(handle, c.SDL_CONTROLLER_AXIS_TRIGGERLEFT),
+        .right_trigger = trigger(handle, c.SDL_CONTROLLER_AXIS_TRIGGERRIGHT),
+    };
+    return 1;
+}
+
 pub export fn go_controller_input_encode_metadata(
     input: ?*Input,
     output: ?[*]u8,
@@ -245,44 +290,21 @@ pub export fn go_controller_input_encode(
     capacity: usize,
 ) usize {
     const handle = input orelse return 0;
-    if (handle.controller == null) return 0;
     const bytes = output orelse return 0;
     if (capacity < 38) return 0;
-
-    var source_buttons: u32 = 0;
-    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_A)) source_buttons |= wire.SourceButton.a;
-    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_B)) source_buttons |= wire.SourceButton.b;
-    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_X)) source_buttons |= wire.SourceButton.x;
-    if (semanticButtonPressed(handle, c.SDL_CONTROLLER_BUTTON_Y)) source_buttons |= wire.SourceButton.y;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) source_buttons |= wire.SourceButton.left_shoulder;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) source_buttons |= wire.SourceButton.right_shoulder;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_BACK)) source_buttons |= wire.SourceButton.back;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_START)) source_buttons |= wire.SourceButton.start;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_UP)) source_buttons |= wire.SourceButton.dpad_up;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_DOWN)) source_buttons |= wire.SourceButton.dpad_down;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_LEFT)) source_buttons |= wire.SourceButton.dpad_left;
-    if (button(handle, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) source_buttons |= wire.SourceButton.dpad_right;
-    const left_stick = button(handle, c.SDL_CONTROLLER_BUTTON_LEFTSTICK);
-    const right_stick = button(handle, c.SDL_CONTROLLER_BUTTON_RIGHTSTICK);
-    const stick_buttons = handle.guide_chord.update(left_stick, right_stick);
-    if (stick_buttons.left) source_buttons |= wire.SourceButton.left_stick;
-    if (stick_buttons.right) source_buttons |= wire.SourceButton.right_stick;
-
-    const raw_left_y = axis(handle, c.SDL_CONTROLLER_AXIS_LEFTY);
-    const raw_right_y = axis(handle, c.SDL_CONTROLLER_AXIS_RIGHTY);
-    const left_y = if (raw_left_y == std.math.minInt(i16)) std.math.maxInt(i16) else -raw_left_y;
-    const right_y = if (raw_right_y == std.math.minInt(i16)) std.math.maxInt(i16) else -raw_right_y;
+    var state: c.GoControllerState = undefined;
+    if (go_controller_input_sample(handle, &state) == 0) return 0;
     wire.encodeGamepadRaw(
         bytes[0..wire.PACKET_SIZE],
         handle.sequence,
         0.0,
-        wire.buttonMask(source_buttons),
-        axis(handle, c.SDL_CONTROLLER_AXIS_LEFTX),
-        left_y,
-        axis(handle, c.SDL_CONTROLLER_AXIS_RIGHTX),
-        right_y,
-        trigger(handle, c.SDL_CONTROLLER_AXIS_TRIGGERLEFT),
-        trigger(handle, c.SDL_CONTROLLER_AXIS_TRIGGERRIGHT),
+        wire.buttonMask(state.buttons),
+        state.left_x,
+        state.left_y,
+        state.right_x,
+        state.right_y,
+        state.left_trigger,
+        state.right_trigger,
     );
     handle.sequence +%= 1;
     return wire.PACKET_SIZE;

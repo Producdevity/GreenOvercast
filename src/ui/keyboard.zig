@@ -47,7 +47,6 @@ const row_letters_3 = [_]Key{
     .{ .label = "B", .action = .{ .character = 'B' } },
     .{ .label = "N", .action = .{ .character = 'N' } },
     .{ .label = "M", .action = .{ .character = 'M' } },
-    .{ .label = "SPACE", .action = .space, .width_units = 3 },
 };
 
 const row_numbers = [_]Key{
@@ -63,11 +62,16 @@ const row_numbers = [_]Key{
     .{ .label = "0", .action = .{ .character = '0' } },
 };
 
+const row_space = [_]Key{
+    .{ .label = "SPACE", .action = .space, .width_units = 5 },
+};
+
 pub const rows = [_][]const Key{
+    &row_numbers,
     &row_letters_1,
     &row_letters_2,
     &row_letters_3,
-    &row_numbers,
+    &row_space,
 };
 
 pub const Selection = struct {
@@ -148,9 +152,9 @@ pub fn clear(query: []u8) void {
 test "space key inserts a space" {
     var query = [_]u8{0} ** 16;
     @memcpy(query[0..6], "HOLLOW");
-    var selection = Selection{ .row = 2, .column = 7 };
+    var selection = Selection{ .row = 4, .column = 0 };
     activate(selection, &query);
-    selection = .{ .row = 2, .column = 5 };
+    selection = .{ .row = 3, .column = 5 };
     activate(selection, &query);
     try std.testing.expectEqualStrings("HOLLOW N", std.mem.sliceTo(&query, 0));
 }
@@ -160,17 +164,17 @@ test "selection wraps and stays within the next row" {
     selection.moveHorizontal(-1);
     try std.testing.expectEqual(@as(usize, 9), selection.column);
     selection.moveVertical(1);
-    try std.testing.expectEqual(@as(usize, 8), selection.column);
+    try std.testing.expectEqual(@as(usize, 9), selection.column);
     selection.moveVertical(1);
-    try std.testing.expectEqual(@as(usize, 7), selection.column);
+    try std.testing.expectEqual(@as(usize, 8), selection.column);
 }
 
 test "vertical movement follows the visual center of the space key" {
-    var selection = Selection{ .row = 2, .column = 7 };
-    selection.moveVertical(1);
-    try std.testing.expectEqual(@as(usize, 3), selection.row);
-    try std.testing.expectEqual(@as(usize, 8), selection.column);
+    var selection = Selection{ .row = 4, .column = 0 };
     selection.moveVertical(-1);
-    try std.testing.expectEqual(@as(usize, 2), selection.row);
-    try std.testing.expectEqual(@as(usize, 7), selection.column);
+    try std.testing.expectEqual(@as(usize, 3), selection.row);
+    try std.testing.expectEqual(@as(usize, 3), selection.column);
+    selection.moveVertical(1);
+    try std.testing.expectEqual(@as(usize, 4), selection.row);
+    try std.testing.expectEqual(@as(usize, 0), selection.column);
 }

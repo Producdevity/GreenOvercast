@@ -2,6 +2,7 @@ const std = @import("std");
 const controls = @import("control_icons.zig");
 const search = @import("catalog_search");
 const font = @import("pixel_font.zig");
+const provider_badge = @import("provider_badge.zig");
 const settings = @import("persistent_settings.zig");
 const style = @import("view_style.zig");
 
@@ -136,20 +137,20 @@ pub fn draw(
     view: *const View,
     store: *const settings.Store,
     artwork_pointer: ?*anyopaque,
+    provider: provider_badge.Provider,
 ) void {
     const renderer: *c.SDL_Renderer = @ptrCast(@alignCast(renderer_pointer));
     const artwork: ?*c.SDL_Texture = if (artwork_pointer) |value| @ptrCast(@alignCast(value)) else null;
     style.setColor(renderer, style.background());
     _ = c.SDL_RenderClear(renderer);
     style.setColor(renderer, style.panel());
-    var header = c.SDL_Rect{ .x = 0, .y = 0, .w = style.display_width, .h = 78 };
+    var header = c.SDL_Rect{ .x = 0, .y = 0, .w = style.display_width, .h = 62 };
     var footer = c.SDL_Rect{ .x = 0, .y = 424, .w = style.display_width, .h = 56 };
     _ = c.SDL_RenderFillRect(renderer, &header);
     _ = c.SDL_RenderFillRect(renderer, &footer);
     style.drawMark(renderer);
-    font.text(renderer, 78, 12, 4, "GREENOVERCAST", style.bright());
-
     drawTabs(renderer, view.collection);
+    provider_badge.draw(renderer, provider);
     if (view.count == 0) {
         const empty = if (view.collection == .favorites) "NO FAVORITES YET" else "NO MATCHING GAMES";
         font.text(renderer, 28, 206, 3, empty, style.muted());
@@ -177,7 +178,7 @@ pub fn draw(
         const index = start + row;
         if (index >= view.count) break;
         const title = &view.titles[view.indices[index]];
-        const y: c_int = @intCast(86 + row * 36);
+        const y: c_int = @intCast(70 + row * 38);
         if (index == view.selected) {
             style.setColor(renderer, style.selection());
             var selection = c.SDL_Rect{ .x = 14, .y = y, .w = list_right - 14, .h = 32 };
@@ -223,16 +224,16 @@ pub fn draw(
 
 fn drawTabs(renderer: *c.SDL_Renderer, active: Collection) void {
     const labels = [_]struct { Collection, [*:0]const u8, c_int }{
-        .{ .all, "ALL", 210 },
-        .{ .favorites, "FAVORITES", 300 },
+        .{ .all, "ALL", 84 },
+        .{ .favorites, "FAVORITES", 162 },
     };
     for (labels) |entry| {
         if (entry[0] == active) {
             style.setColor(renderer, style.selection());
-            var rect = c.SDL_Rect{ .x = entry[2] - 10, .y = 48, .w = font.textWidth(entry[1], 2) + 20, .h = 24 };
+            var rect = c.SDL_Rect{ .x = entry[2] - 10, .y = 16, .w = font.textWidth(entry[1], 2) + 20, .h = 28 };
             _ = c.SDL_RenderFillRect(renderer, &rect);
         }
-        font.text(renderer, entry[2], 52, 2, entry[1], if (entry[0] == active) style.bright() else style.muted());
+        font.text(renderer, entry[2], 22, 2, entry[1], if (entry[0] == active) style.bright() else style.muted());
     }
 }
 

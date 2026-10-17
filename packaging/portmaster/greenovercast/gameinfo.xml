@@ -3,7 +3,7 @@
   <game>
     <path>./GreenOvercast.sh</path>
     <name>GreenOvercast</name>
-    <desc>A native Xbox Cloud Gaming client with a searchable, controller-first library for Linux handhelds.</desc>
+    <desc>An unofficial Xbox Cloud Gaming and GeForce NOW client with a searchable, controller-first library for Linux handhelds.</desc>
     <releasedate>20260726T000000</releasedate>
     <developer>GreenOvercast</developer>
     <publisher>GreenOvercast</publisher>
