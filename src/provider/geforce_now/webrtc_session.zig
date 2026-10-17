@@ -5,6 +5,7 @@ const pointer_input = @import("pointer_input.zig");
 const sdp_protocol = @import("sdp_protocol.zig");
 const signaling_client = @import("signaling_client.zig");
 const signaling_protocol = @import("signaling_protocol.zig");
+const stream_preferences = @import("stream_preferences.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -18,8 +19,6 @@ const c = @cImport({
 const event_capacity = 64;
 const maximum_tracks = 8;
 const maximum_channels = 8;
-const minimum_bitrate_kbps = 4000;
-const maximum_bitrate_kbps = 20000;
 
 const EarlyIceCandidates = struct {
     messages: std.BoundedArray(signaling_protocol.DecodedMessage, 32) = .{},
@@ -143,6 +142,7 @@ pub const Session = struct {
     started_at: u32 = 0,
     last_input_heartbeat: u32 = 0,
     bitrate_requested: bool = false,
+    max_bitrate_kbps: u32,
     video_packets: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     audio_packets: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     gamepad_logged: bool = false,
@@ -157,8 +157,11 @@ pub const Session = struct {
         width: u16,
         height: u16,
         frames_per_second: u16,
+        max_bitrate_kbps: u32,
     ) !*Session {
         if (cloud.signaling_url == null or cloud.id.len == 0) return error.MissingSignalingData;
+        if (!stream_preferences.validBitrate(max_bitrate_kbps))
+            return error.InvalidStreamPreferences;
         const session = try allocator.create(Session);
         session.* = .{
             .allocator = allocator,
@@ -170,6 +173,7 @@ pub const Session = struct {
             .width = width,
             .height = height,
             .frames_per_second = frames_per_second,
+            .max_bitrate_kbps = max_bitrate_kbps,
         };
         return session;
     }
@@ -353,17 +357,8 @@ pub const Session = struct {
     pub fn requestBitrate(self: *Session) void {
         if (self.bitrate_requested or self.video_track < 0 or
             c.go_video_pipeline_has_media(self.video) == 0) return;
-        const ceiling_bps = @as(u64, self.bitrateCeilingKbps()) * 1000;
-        if (c.rtcRequestBitrate(self.video_track, @intCast(ceiling_bps)) >= 0)
+        if (c.rtcRequestBitrate(self.video_track, self.max_bitrate_kbps * 1000) >= 0)
             self.bitrate_requested = true;
-    }
-
-    fn bitrateCeilingKbps(self: *const Session) u32 {
-        return std.math.clamp(
-            c.go_handheld_ui_max_bitrate_kbps(self.ui),
-            minimum_bitrate_kbps,
-            maximum_bitrate_kbps,
-        );
     }
 
     pub fn destroy(self: *Session) void {
@@ -442,7 +437,7 @@ pub const Session = struct {
                     self.width,
                     self.height,
                     self.frames_per_second,
-                    self.bitrateCeilingKbps(),
+                    self.max_bitrate_kbps,
                 );
                 defer self.allocator.free(nvst);
                 try self.signaling.?.sendAnswer(narrowed_sdp, nvst);
@@ -903,4 +898,40 @@ test "ICE URL construction releases partial allocations" {
             defer freeIceUrls(allocator, result);
         }
     }.run, .{});
+}
+
+test "session bitrate reaches NVST and feedback in the correct units" {
+    const feedback = @import("gfn_video_feedback_fake");
+    var cloud = try cloudmatch.parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionControlInfo":{"ip":"np.example.nvidiagrid.net","port":443}}}
+    );
+    defer cloud.deinit();
+    const pointer: *anyopaque = @ptrFromInt(1);
+    const session = try Session.create(std.testing.allocator, pointer, pointer, pointer, pointer, &cloud, 1024, 768, 60, 16000);
+    defer std.testing.allocator.destroy(session);
+    const answer =
+        "v=0\r\na=ice-ufrag:test\r\na=ice-pwd:password\r\na=fingerprint:sha-256 AA:BB\r\n";
+    const nvst = try sdp_protocol.buildNvstAnswer(std.testing.allocator, answer, "", session.width, session.height, session.frames_per_second, session.max_bitrate_kbps);
+    defer std.testing.allocator.free(nvst);
+    try std.testing.expect(std.mem.indexOf(u8, nvst, "a=video.maxFPS:60\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nvst, "a=vqos.bw.maximumBitrateKbps:16000\r\n") != null);
+
+    feedback.calls = 0;
+    feedback.bitrate_bps = 0;
+    feedback.result = 0;
+    feedback.media_available = false;
+    session.video_track = 1;
+    session.requestBitrate();
+    try std.testing.expectEqual(@as(usize, 0), feedback.calls);
+    feedback.media_available = true;
+    feedback.result = -1;
+    session.requestBitrate();
+    try std.testing.expect(!session.bitrate_requested);
+    feedback.result = 0;
+    session.requestBitrate();
+    try std.testing.expect(session.bitrate_requested);
+    try std.testing.expectEqual(@as(c_uint, 16_000_000), feedback.bitrate_bps);
+    session.requestBitrate();
+    try std.testing.expectEqual(@as(usize, 2), feedback.calls);
+    try std.testing.expectError(error.InvalidStreamPreferences, Session.create(std.testing.allocator, pointer, pointer, pointer, pointer, &cloud, 1024, 768, 60, std.math.maxInt(u32)));
 }

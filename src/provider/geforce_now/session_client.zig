@@ -3,6 +3,14 @@ const auth_client = @import("auth_client.zig");
 const protocol = @import("cloudmatch_protocol.zig");
 const subscription = @import("subscription_protocol.zig");
 const uuid = @import("uuid");
+const ads = @import("ad_protocol.zig");
+
+pub const StreamPreferences = @import("stream_preferences.zig").Preferences;
+
+pub const AdHandler = struct {
+    context: *anyopaque,
+    run: *const fn (*anyopaque, *Client, ads.Opportunity, u8) anyerror!void,
+};
 
 const c = @cImport({
     @cInclude("handheld_ui.h");
@@ -17,7 +25,6 @@ const user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 const fallback_stream_width: u16 = 1024;
 const fallback_stream_height: u16 = 768;
-const preferred_frames_per_second: u16 = 30;
 const maximum_stream_width: u16 = 1280;
 const maximum_stream_height: u16 = 768;
 const maximum_bearer_length = 64 * 1024;
@@ -33,8 +40,12 @@ pub const Client = struct {
     last_response_retryable: ?bool = null,
     stream_width: u16 = fallback_stream_width,
     stream_height: u16 = fallback_stream_height,
-    requested_frames_per_second: u16 = preferred_frames_per_second,
-    stream_frames_per_second: u16 = preferred_frames_per_second,
+    stream_preferences: StreamPreferences = .{},
+    stream_frames_per_second: u16 = (StreamPreferences{}).frames_per_second,
+    ad_handler: ?AdHandler = null,
+    ad_stop: ?*std.atomic.Value(bool) = null,
+    completed_ads: std.ArrayListUnmanaged([]u8) = .{},
+    app_id: ?[]u8 = null,
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -49,13 +60,12 @@ pub const Client = struct {
             .client_id = undefined,
         };
         uuid.generate(&client.client_id);
-        const configured_fps = c.go_handheld_ui_frames_per_second(client.ui);
-        if (configured_fps > 0) client.requested_frames_per_second = @intCast(configured_fps);
-        client.stream_frames_per_second = client.requested_frames_per_second;
         return client;
     }
 
     pub fn destroy(self: *Client) void {
+        if (self.app_id) |id| self.allocator.free(id);
+        self.clearAds();
         if (self.session) |*session| session.deinit();
         if (self.streaming_url) |url| self.allocator.free(url);
         const allocator = self.allocator;
@@ -68,9 +78,16 @@ pub const Client = struct {
         internal_title: []const u8,
         width: u16,
         height: u16,
+        preferences: StreamPreferences,
     ) !void {
         if (self.session != null) return error.SessionAlreadyActive;
+        try preferences.validate();
+        self.stream_preferences = preferences;
+        self.clearAds();
         uuid.generate(&self.client_id);
+        if (self.app_id) |id| self.allocator.free(id);
+        self.app_id = null;
+        self.app_id = try self.allocator.dupe(u8, app_id);
         const bearer = self.auth.bearer() orelse return error.MissingCredentials;
         const provider_url = self.auth.streamingUrl() orelse return error.MissingProvider;
         const user_age = try self.auth.fetchUserAge();
@@ -125,7 +142,23 @@ pub const Client = struct {
         while (true) {
             const current = if (self.session) |*session| session else return error.MissingSession;
             if (current.ended()) return error.SessionEnded;
-            if (current.ready() and current.signaling_url != null) return;
+            if (current.ads) |admission| {
+                if (admission.required) for (admission.opportunities) |opportunity| {
+                    var handled = false;
+                    for (self.completed_ads.items) |id| if (std.mem.eql(u8, id, opportunity.id)) {
+                        handled = true;
+                        break;
+                    };
+                    if (handled) continue;
+                    if (self.completed_ads.items.len == 64) return error.TooManyAdOpportunities;
+                    const handler = self.ad_handler orelse return error.AdPlayerUnavailable;
+                    const id = try self.allocator.dupe(u8, opportunity.id);
+                    errdefer self.allocator.free(id);
+                    try handler.run(handler.context, self, opportunity, admission.provider);
+                    try self.completed_ads.append(self.allocator, id);
+                };
+                if (current.ready() and current.signaling_url != null and !admission.required) return;
+            } else if (current.ready() and current.signaling_url != null) return;
             self.drawProgress(current);
             if (c.go_handheld_ui_wait(self.ui, pollDelay(consecutive_server_errors)) != 0)
                 return error.Cancelled;
@@ -174,6 +207,32 @@ pub const Client = struct {
         c.go_http_response_destroy(response);
     }
 
+    fn clearAds(self: *Client) void {
+        for (self.completed_ads.items) |id| self.allocator.free(id);
+        self.completed_ads.deinit(self.allocator);
+        self.completed_ads = .{};
+    }
+
+    pub fn reportAd(self: *Client, id: []const u8, update: ads.Update) !void {
+        const session = self.session orelse return error.MissingSession;
+        const admission = session.ads orelse return error.MissingAdMetadata;
+        const base = admission.control_base orelse self.streaming_url orelse return error.MissingProvider;
+        const bearer = self.auth.bearer() orelse return error.MissingCredentials;
+        const body = try ads.buildUpdate(self.allocator, id, update, std.time.timestamp());
+        defer self.allocator.free(body);
+        var buffer: [1024]u8 = undefined;
+        const url = try std.fmt.bufPrintZ(&buffer, "{s}v2/session/{s}", .{ base, session.id });
+        const response = try self.request("PUT", url, body, bearer);
+        defer c.go_http_response_destroy(response);
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response.*.data[0..response.*.len], .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return error.AdUpdateRejected;
+        const status = parsed.value.object.get("requestStatus") orelse return error.AdUpdateRejected;
+        if (status != .object) return error.AdUpdateRejected;
+        const code = status.object.get("statusCode") orelse return error.AdUpdateRejected;
+        if (code != .integer or code.integer != 1) return error.AdUpdateRejected;
+    }
+
     pub fn sessionInfo(self: *Client) ?*const protocol.Session {
         return if (self.session) |*session| session else null;
     }
@@ -208,7 +267,7 @@ pub const Client = struct {
         var dynamic_headers: [2][256]u8 = undefined;
         var headers = [_][*c]const u8{
             authorization.ptr,
-            try header(&dynamic_headers[0], "nv-client-id", null, self.clientId()),
+            try header(&dynamic_headers[0], "nv-client-id", null, self.auth.protocolClientId()),
             try header(&dynamic_headers[1], "x-device-id", null, self.auth.stableDeviceId()),
             "Accept: application/json",
             "Content-Type: application/json",
@@ -352,7 +411,7 @@ pub const Client = struct {
     ) !void {
         self.stream_width = fallback_stream_width;
         self.stream_height = fallback_stream_height;
-        self.stream_frames_per_second = self.requested_frames_per_second;
+        self.stream_frames_per_second = self.stream_preferences.frames_per_second;
         const summary = self.fetchSubscriptionStatus(provider_url, bearer) catch |err| {
             if (err == error.Cancelled) return err;
             std.debug.print("GeForce NOW membership check unavailable: {s}\n", .{@errorName(err)});
@@ -373,7 +432,7 @@ pub const Client = struct {
         if (summary.bestForDisplayWithin(
             display_width,
             display_height,
-            self.requested_frames_per_second,
+            self.stream_preferences.frames_per_second,
             maximum_stream_width,
             maximum_stream_height,
         )) |selected| {
@@ -381,13 +440,14 @@ pub const Client = struct {
             self.stream_height = selected.height;
             self.stream_frames_per_second = selected.frames_per_second;
             std.debug.print(
-                "GeForce NOW stream mode: {d}x{d}@{d} for {d}x{d} display\n",
+                "GeForce NOW stream mode: {d}x{d}@{d} for {d}x{d} display, max bitrate {d} kbps\n",
                 .{
                     selected.width,
                     selected.height,
                     selected.frames_per_second,
                     display_width,
                     display_height,
+                    self.stream_preferences.max_bitrate_kbps,
                 },
             );
         }
@@ -475,7 +535,7 @@ pub const Client = struct {
         var dynamic_headers: [2][256]u8 = undefined;
         var headers = [_][*c]const u8{
             authorization.ptr,
-            try header(&dynamic_headers[0], "nv-client-id", null, self.clientId()),
+            try header(&dynamic_headers[0], "nv-client-id", null, self.auth.protocolClientId()),
             try header(&dynamic_headers[1], "x-device-id", null, self.auth.stableDeviceId()),
             "Accept: application/json",
             "nv-client-streamer: NVIDIA-CLASSIC",
@@ -528,6 +588,7 @@ pub const Client = struct {
 
 fn requestCancelled(context: ?*anyopaque) callconv(.c) c_int {
     const client: *Client = @ptrCast(@alignCast(context orelse return 1));
+    if (client.ad_stop) |stop| return @intFromBool(stop.load(.acquire));
     return c.go_handheld_ui_cancel_requested(client.ui);
 }
 
@@ -735,24 +796,140 @@ test "membership and region discovery requests preserve cancellation" {
     try std.testing.expectEqual(@as(usize, 1), http.polls);
 }
 
-test "stream mode selection keeps the configured frame rate" {
+test "ready sessions still require ad admission and repeated pod IDs play only once" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    const Handler = struct {
+        calls: usize = 0,
+        fn run(pointer: *anyopaque, client: *Client, opportunity: ads.Opportunity, provider: u8) !void {
+            const self: *@This() = @ptrCast(@alignCast(pointer));
+            self.calls += 1;
+            try std.testing.expectEqualStrings("pod", opportunity.id);
+            try std.testing.expectEqual(@as(u8, 1), provider);
+            http.replyJson("{\"requestStatus\":{\"statusCode\":1}}");
+            try client.reportAd(opportunity.id, .{ .action = .cancel, .reason = "VAST_EMPTY_RESPONSE" });
+            http.replyJson(
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionAdsRequired":false,"sessionControlInfo":{"ip":"np.example.nvidiagrid.net","port":443}}}
+            );
+        }
+    };
+    var handler = Handler{};
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{ .allocator = std.testing.allocator, .auth = &auth, .ui = @ptrCast(auth.ui), .client_id = [_]u8{0} ** 37, .streaming_url = @constCast("https://np.example.nvidiagrid.net/"), .ad_handler = .{ .context = &handler, .run = Handler.run }, .session = try protocol.parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionAdsRequired":true,"adProvider":1,"sessionControlInfo":{"ip":"np.example.nvidiagrid.net","port":443},"sessionAds":[{"adId":"pod","adUrl":"https://example.invalid/tag"},{"adId":"pod","adUrl":"https://example.invalid/tag"}]}}
+    ) };
+    defer client.session.?.deinit();
+    defer client.clearAds();
+    try client.waitUntilReady();
+    try std.testing.expectEqual(@as(usize, 1), handler.calls);
+    try std.testing.expectEqual(@as(usize, 2), http.requests);
+    try std.testing.expect(!client.session.?.ads.?.required);
+}
+
+test "ad reports require a positive CloudMatch acknowledgement" {
     const http = @import("gfn_http_fake");
     http.reset();
     http.cancel_on_poll = std.math.maxInt(usize);
     var auth = http.authClient(auth_client.Client);
-    var client = Client{
-        .allocator = std.testing.allocator,
-        .auth = &auth,
-        .ui = @ptrCast(auth.ui),
-        .client_id = [_]u8{0} ** 37,
-        .requested_frames_per_second = 60,
+    var client = Client{ .allocator = std.testing.allocator, .auth = &auth, .ui = @ptrCast(auth.ui), .client_id = [_]u8{0} ** 37, .streaming_url = @constCast("https://np.example.nvidiagrid.net/"), .session = try protocol.parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":1}}
+    ) };
+    defer client.session.?.deinit();
+    const update = ads.Update{ .action = .finish, .watched_ms = 5000, .duration_ms = 5000 };
+    for ([_][]const u8{ "{}", "{\"requestStatus\":{\"statusCode\":2}}", "{\"requestStatus\":{\"statusCode\":null}}" }) |body| {
+        http.replyJson(body);
+        try std.testing.expectError(error.AdUpdateRejected, client.reportAd("pod", update));
+    }
+    http.replyJson("{\"requestStatus\":{\"statusCode\":1}}");
+    try client.reportAd("pod", update);
+}
+
+test "each stream snapshots preferences changed after provider creation" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    const Handler = struct {
+        var user_info = "{\"sub\":\"test-user\",\"age\":30}".*;
+
+        fn respond(method: []const u8, url: []const u8) void {
+            if (std.mem.eql(u8, method, "DELETE")) {
+                http.replyNoContent();
+            } else if (std.mem.endsWith(u8, url, "/userinfo")) {
+                user_info = "{\"sub\":\"test-user\",\"age\":30}".*;
+                http.replyJson(&user_info);
+            } else if (std.mem.endsWith(u8, url, "/v2/serverInfo")) {
+                http.replyJson("{\"requestStatus\":{\"statusCode\":1,\"serverId\":\"TEST\"}}");
+            } else if (std.mem.indexOf(u8, url, "/v4/subscriptions?") != null) {
+                http.replyJson(
+                    \\{"features":{"resolutions":[
+                    \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":30,"isEntitled":true},
+                    \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":60,"isEntitled":true}
+                    \\]}}
+                );
+            } else if (std.mem.eql(u8, method, "POST")) {
+                http.replyJson("{\"requestStatus\":{\"statusCode\":1},\"session\":{\"sessionId\":\"test-session\",\"status\":1}}");
+            } else http.response = null;
+        }
     };
+    http.on_request = Handler.respond;
+    var auth = http.authClient(auth_client.Client);
+    @memcpy(auth.device_id[0..36], "00000000-0000-4000-8000-000000000001");
+    auth.provider = try @import("provider_protocol.zig").parsePreferredProvider(std.testing.allocator,
+        \\{"gfnServiceInfo":{"gfnServiceEndpoints":[{"loginProviderCode":"NVIDIA","loginProviderDisplayName":"NVIDIA","idpId":"test","streamingServiceUrl":"https://np.example.nvidiagrid.net/"}]}}
+    );
+    defer auth.provider.?.deinit();
+    const client = try Client.create(std.testing.allocator, &auth, @ptrCast(auth.ui));
+    defer client.destroy();
+
+    var preferences = StreamPreferences{};
+    for ([_]StreamPreferences{
+        .{ .frames_per_second = 60, .max_bitrate_kbps = 16000 },
+        .{ .frames_per_second = 30, .max_bitrate_kbps = 4000 },
+    }) |changed| {
+        preferences = changed;
+        const before = http.requests;
+        try client.start("12345", "Test game", 640, 480, preferences);
+        try std.testing.expectEqual(@as(usize, 5), http.requests - before);
+        try std.testing.expectEqual(preferences.frames_per_second, client.streamFramesPerSecond());
+        try std.testing.expectEqualDeep(preferences, client.stream_preferences);
+        const body = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, http.last_body[0..http.last_body_length], .{});
+        defer body.deinit();
+        const monitors = body.value.object.get("sessionRequestData").?.object.get("clientRequestMonitorSettings").?.array;
+        try std.testing.expectEqual(@as(i64, preferences.frames_per_second), monitors.items[0].object.get("framesPerSecond").?.integer);
+
+        preferences.max_bitrate_kbps = 20000;
+        try std.testing.expectEqual(changed.max_bitrate_kbps, client.stream_preferences.max_bitrate_kbps);
+        try client.stop();
+    }
+}
+
+test "stream start rejects invalid preferences before network requests" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    var auth = http.authClient(auth_client.Client);
+    const client = try Client.create(std.testing.allocator, &auth, @ptrCast(auth.ui));
+    defer client.destroy();
+    try std.testing.expectError(error.InvalidStreamPreferences, client.start("12345", "Test", 640, 480, .{ .frames_per_second = 1 }));
+    try std.testing.expectError(error.InvalidStreamPreferences, client.start("12345", "Test", 640, 480, .{ .max_bitrate_kbps = std.math.maxInt(u32) }));
+    try std.testing.expectEqual(@as(usize, 0), http.requests);
+}
+
+test "entitlement fallback does not overwrite requested preferences" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
     http.replyJson(
-        \\{"features":{"resolutions":[
-        \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":30,"isEntitled":true},
-        \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":60,"isEntitled":true}
+        \\{"requestStatus":{"statusCode":1,"serverId":"TEST"},"features":{"resolutions":[
+        \\  {"widthInPixels":1024,"heightInPixels":768,"framesPerSecond":30,"isEntitled":true}
         \\]}}
     );
-    try client.selectStreamMode("https://example.invalid/", auth.bearer().?, 640, 480);
-    try std.testing.expectEqual(@as(u16, 60), client.stream_frames_per_second);
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{ .allocator = std.testing.allocator, .auth = &auth, .ui = @ptrCast(auth.ui), .client_id = [_]u8{0} ** 37, .stream_preferences = .{ .frames_per_second = 60, .max_bitrate_kbps = 12000 } };
+    try client.selectStreamMode("https://np.example.nvidiagrid.net/", auth.bearer().?, 640, 480);
+    try std.testing.expectEqual(@as(usize, 2), http.requests);
+    try std.testing.expectEqual(@as(u16, 30), client.streamFramesPerSecond());
+    try std.testing.expectEqual(@as(u16, 60), client.stream_preferences.frames_per_second);
 }

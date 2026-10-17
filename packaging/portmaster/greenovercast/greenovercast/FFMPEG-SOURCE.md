@@ -1,7 +1,7 @@
 # FFmpeg
 
-GreenOvercast ships `libavcodec`, `libavutil`, and `libswscale` from FFmpeg
-9.0 under LGPLv2.1-or-later.
+GreenOvercast ships `libavcodec`, `libavformat`, `libavutil`, `libswresample`,
+and `libswscale` from FFmpeg 9.0 under LGPLv2.1-or-later.
 
 Source: <https://ffmpeg.org/releases/ffmpeg-9.0.tar.xz>
 

@@ -3,12 +3,15 @@ const std = @import("std");
 // glibc 2.38 is the oldest userspace supported by the packaged release.
 const aarch64_linux_query: std.Target.Query = .{
     .cpu_arch = .aarch64,
+    // Keep baseline ARM64 atomics independent of firmware runtime helpers.
+    .cpu_features_sub = std.Target.aarch64.featureSet(&.{.outline_atomics}),
     .os_tag = .linux,
     .abi = .gnu,
     .glibc_version = .{ .major = 2, .minor = 38, .patch = 0 },
 };
 
 const c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" };
+const aarch64_c_test_flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-mno-outline-atomics" };
 
 const project_include_paths = [_][]const u8{
     "vendor/libdatachannel/include",
@@ -57,7 +60,10 @@ const release_zig_roots = [_]struct {
     .{
         .name = "greenovercast-ui",
         .path = "src/ui/handheld_ui.zig",
-        .imports = &.{.{ .name = "catalog_search", .path = "src/catalog/catalog_search.zig" }},
+        .imports = &.{
+            .{ .name = "catalog_search", .path = "src/catalog/catalog_search.zig" },
+            .{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" },
+        },
     },
     .{ .name = "greenovercast-sdl-platform", .path = "src/platform/sdl_platform.zig" },
     .{
@@ -137,11 +143,14 @@ fn addZigImport(
     name: []const u8,
     source: []const u8,
 ) void {
-    module.addImport(name, b.createModule(.{
+    const imported = b.createModule(.{
         .root_source_file = b.path(source),
         .target = target,
         .optimize = optimize,
-    }));
+    });
+    if (std.mem.eql(u8, name, "xml_document") or std.mem.eql(u8, name, "clip_player"))
+        imported.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    module.addImport(name, imported);
 }
 
 fn addStaticArchive(module: *std.Build.Module, b: *std.Build, path: []const u8) void {
@@ -164,6 +173,16 @@ fn addHostUnitTest(
     });
     if (project_includes) addProjectIncludes(b, module);
     if (sdl) module.linkSystemLibrary("SDL2", .{ .use_pkg_config = .force });
+    if (std.mem.endsWith(u8, source, "/vast.zig") or std.mem.endsWith(u8, source, "/ad_policy.zig") or
+        std.mem.endsWith(u8, source, "/ad_network.zig"))
+        addZigImport(b, module, b.graph.host, .Debug, "xml_document", "src/net/xml_document.zig");
+    if (std.mem.endsWith(u8, source, "/vast.zig") or std.mem.endsWith(u8, source, "/xml_document.zig") or
+        std.mem.endsWith(u8, source, "/ad_policy.zig") or std.mem.endsWith(u8, source, "/ad_network.zig"))
+        module.linkSystemLibrary("expat", .{ .use_pkg_config = .force });
+    if (std.mem.endsWith(u8, source, "/ad_network.zig")) {
+        module.addCSourceFile(.{ .file = b.path("src/net/http_client.c"), .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror" } });
+        module.linkSystemLibrary("curl", .{ .use_pkg_config = .force });
+    }
     for (imports) |item|
         addZigImport(b, module, b.graph.host, .Debug, item.name, item.path);
     const unit_tests = b.addTest(.{ .root_module = module });
@@ -191,6 +210,8 @@ fn addReleaseArtifacts(
     });
     addProjectIncludes(b, main_module);
     main_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    addZigImport(b, main_module, target, optimize, "xml_document", "src/net/xml_document.zig");
+    addZigImport(b, main_module, target, optimize, "clip_player", "src/media/clip/player.zig");
     addZigImport(
         b,
         main_module,
@@ -219,7 +240,7 @@ fn addReleaseArtifacts(
     main_module.addRPathSpecial("$ORIGIN");
     main_module.addCSourceFiles(.{
         .files = &release_c_sources,
-        .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror" },
+        .flags = &.{ "-std=gnu11", "-D_GNU_SOURCE", "-Wall", "-Wextra", "-Werror", "-mno-outline-atomics" },
     });
 
     for (release_zig_roots) |root| {
@@ -237,7 +258,8 @@ fn addReleaseArtifacts(
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libssl.a");
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libcrypto.a");
     addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libopus.a");
-    for ([_][]const u8{ "pthread", "dl", "SDL2", "avcodec", "avutil", "swscale" }) |library| {
+    addStaticArchive(main_module, b, ".tools/deps/aarch64-linux-gnu/lib/libexpat.a");
+    for ([_][]const u8{ "pthread", "dl", "SDL2", "avcodec", "avutil", "swscale", "avformat", "swresample" }) |library| {
         main_module.linkSystemLibrary(library, .{ .use_pkg_config = .no });
     }
 
@@ -266,6 +288,7 @@ fn addReleaseArtifacts(
         .files = &cedar_sources,
         .flags = &.{
             "-std=gnu11",
+            "-mno-outline-atomics",
             "-D_GNU_SOURCE",
             "-includestdint.h",
             "-fvisibility=hidden",
@@ -293,7 +316,7 @@ fn addReleaseArtifacts(
     cedar_test_module.addIncludePath(b.path("src/media/video"));
     cedar_test_module.addCSourceFile(.{
         .file = b.path("tests/device/cedar_bridge_test.c"),
-        .flags = c_test_flags,
+        .flags = aarch64_c_test_flags,
     });
     cedar_test_module.linkLibrary(cedar);
     cedar_test_module.addRPathSpecial("$ORIGIN");
@@ -316,7 +339,7 @@ fn addReleaseArtifacts(
     mpp_module.addRPathSpecial("$ORIGIN");
     mpp_module.addCSourceFile(.{
         .file = b.path("src/media/video/mpp_bridge.c"),
-        .flags = c_test_flags,
+        .flags = aarch64_c_test_flags,
     });
     mpp_module.linkSystemLibrary("rockchip_mpp", .{
         .use_pkg_config = .no,
@@ -365,7 +388,7 @@ fn addReleaseArtifacts(
         });
         module.addIncludePath(b.path("src/media/video"));
         module.addRPathSpecial("$ORIGIN");
-        module.addCSourceFile(.{ .file = b.path(item.source), .flags = c_test_flags });
+        module.addCSourceFile(.{ .file = b.path(item.source), .flags = aarch64_c_test_flags });
         module.addObject(mpp_loader_device_object);
         module.linkSystemLibrary("dl", .{ .use_pkg_config = .no });
         const tool = b.addExecutable(.{ .name = item.name, .root_module = module });
@@ -379,6 +402,8 @@ fn addReleaseArtifacts(
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavcodec.so.63", .name = "libavcodec.so.63" },
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavutil.so.61", .name = "libavutil.so.61" },
         .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libswscale.so.10", .name = "libswscale.so.10" },
+        .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libavformat.so.63", .name = "libavformat.so.63" },
+        .{ .source = ".tools/deps/aarch64-linux-gnu/lib/libswresample.so.7", .name = "libswresample.so.7" },
     };
     var private_library_installs: [private_libraries.len]*std.Build.Step.InstallFile = undefined;
     for (private_libraries, 0..) |library, index| {
@@ -390,14 +415,33 @@ fn addReleaseArtifacts(
         private_library_installs[index] = b.addInstallBinFile(copy.getOutput(), library.name);
     }
 
+    const runtime_check = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/check-aarch64-runtime.sh"),
+        b.getInstallPath(.bin, "webrtc_stream"),
+        b.getInstallPath(.lib, "libgreenovercast-cedar.so"),
+        b.getInstallPath(.bin, "cedar_bridge_test"),
+        b.getInstallPath(.prefix, "rockchip/libgreenovercast-mpp.so"),
+        b.getInstallPath(.prefix, "rockchip/librockchip_mpp.so.1"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-probe.aarch64"),
+        b.getInstallPath(.prefix, "rockchip/greenovercast-mpp-bridge-test.aarch64"),
+        b.getInstallPath(.bin, "libavcodec.so.63"),
+        b.getInstallPath(.bin, "libavutil.so.61"),
+        b.getInstallPath(.bin, "libswscale.so.10"),
+        b.getInstallPath(.bin, "libavformat.so.63"),
+        b.getInstallPath(.bin, "libswresample.so.7"),
+    });
+    runtime_check.setCwd(b.path("."));
+    runtime_check.step.dependOn(&install_executable.step);
+    runtime_check.step.dependOn(&install_cedar.step);
+    runtime_check.step.dependOn(&install_cedar_test.step);
+    runtime_check.step.dependOn(&install_mpp.step);
+    runtime_check.step.dependOn(&install_mpp_runtime.step);
+    for (mpp_device_installs) |install| runtime_check.step.dependOn(&install.step);
+    for (private_library_installs) |install| runtime_check.step.dependOn(&install.step);
+
     const release = b.step("release", "Build the aarch64 application and decoder plugins");
-    release.dependOn(&install_executable.step);
-    release.dependOn(&install_cedar.step);
-    release.dependOn(&install_cedar_test.step);
-    release.dependOn(&install_mpp.step);
-    release.dependOn(&install_mpp_runtime.step);
-    for (mpp_device_installs) |install| release.dependOn(&install.step);
-    for (private_library_installs) |install| release.dependOn(&install.step);
+    release.dependOn(&runtime_check.step);
     return release;
 }
 
@@ -456,6 +500,39 @@ pub fn build(b: *std.Build) void {
     const release = addReleaseArtifacts(b, aarch64_linux, .ReleaseSafe);
     b.default_step.dependOn(release);
 
+    const ad_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/device/ad_playback_test.zig"),
+        .target = aarch64_linux,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    addProjectIncludes(b, ad_test_module);
+    ad_test_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    ad_test_module.addLibraryPath(b.path(".tools/deps/aarch64-linux-gnu/lib"));
+    const ads_module = b.createModule(.{
+        .root_source_file = b.path("src/provider/geforce_now/ad_playback.zig"),
+        .target = aarch64_linux,
+        .optimize = .ReleaseSafe,
+    });
+    addProjectIncludes(b, ads_module);
+    ads_module.addIncludePath(b.path(".tools/deps/aarch64-linux-gnu/include"));
+    for ([_]ZigImport{
+        .{ .name = "xml_document", .path = "src/net/xml_document.zig" },
+        .{ .name = "clip_player", .path = "src/media/clip/player.zig" },
+        .{ .name = "uuid", .path = "src/util/uuid.zig" },
+    }) |item| addZigImport(b, ads_module, aarch64_linux, .ReleaseSafe, item.name, item.path);
+    ad_test_module.addImport("gfn_ads", ads_module);
+    ad_test_module.addCSourceFiles(.{ .files = &.{ "src/ui/artwork_decoder.c", "src/net/http_client.c" }, .flags = aarch64_c_test_flags });
+    for ([_][]const u8{ "avcodec", "avformat", "avutil", "swresample", "swscale", "SDL2", "pthread" }) |library|
+        ad_test_module.linkSystemLibrary(library, .{ .use_pkg_config = .no });
+    for ([_][]const u8{ "expat", "curl", "ssl", "crypto" }) |library|
+        addStaticArchive(ad_test_module, b, b.fmt(".tools/deps/aarch64-linux-gnu/lib/lib{s}.a", .{library}));
+    ad_test_module.addRPathSpecial("$ORIGIN");
+    const ad_test = b.addExecutable(.{ .name = "greenovercast-ad-test.aarch64", .root_module = ad_test_module });
+    ad_test.step.dependOn(release);
+    const ad_test_step = b.step("ad-player-test", "Build the aarch64 ad playback device test");
+    ad_test_step.dependOn(&b.addInstallArtifact(ad_test, .{}).step);
+
     const product_check = b.step("product-check", "Build the complete aarch64 product");
     product_check.dependOn(release);
 
@@ -484,7 +561,7 @@ pub fn build(b: *std.Build) void {
     smoke.root_module.addImport("stat_compat", stat_compat);
     smoke.addCSourceFile(.{
         .file = b.path("src/smoke/cpp_probe.cpp"),
-        .flags = &.{"-std=c++17"},
+        .flags = &.{ "-std=c++17", "-mno-outline-atomics" },
     });
     smoke.linkLibCpp();
 
@@ -511,6 +588,12 @@ pub fn build(b: *std.Build) void {
     });
     dependency_toolchain_test.setCwd(b.path("."));
     test_step.dependOn(&dependency_toolchain_test.step);
+    const aarch64_runtime_test = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tests/aarch64_runtime_test.sh"),
+    });
+    aarch64_runtime_test.setCwd(b.path("."));
+    test_step.dependOn(&aarch64_runtime_test.step);
 
     const tests = [_]struct {
         source: []const u8,
@@ -525,9 +608,22 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/input/guide_chord.zig" },
         .{ .source = "src/session/message_protocol.zig" },
         .{ .source = "src/ui/keyboard.zig" },
-        .{ .source = "src/ui/control_icons.zig" },
+        .{
+            .source = "src/ui/control_icons.zig",
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
         .{ .source = "src/ui/navigation_repeat.zig" },
-        .{ .source = "src/ui/persistent_settings.zig" },
+        .{
+            .source = "src/ui/persistent_settings.zig",
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
+        .{
+            .source = "src/ui/settings_view.zig",
+            .project_includes = true,
+            .sdl = true,
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
+        .{ .source = "src/provider/geforce_now/stream_preferences.zig" },
         .{ .source = "src/ui/stream_dimensions.zig" },
         .{ .source = "src/media/rtp/h264_depacketizer.zig" },
         .{ .source = "src/net/json_reader.zig" },
@@ -538,6 +634,11 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/provider/geforce_now/pointer_input.zig" },
         .{ .source = "src/provider/geforce_now/endpoint.zig" },
         .{ .source = "src/provider/geforce_now/cloudmatch_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/ad_protocol.zig" },
+        .{ .source = "src/provider/geforce_now/ad_policy.zig", .project_includes = true },
+        .{ .source = "src/provider/geforce_now/ad_network.zig", .project_includes = true },
+        .{ .source = "src/net/xml_document.zig", .project_includes = true },
+        .{ .source = "src/provider/geforce_now/vast.zig", .project_includes = true },
         .{ .source = "src/provider/geforce_now/subscription_protocol.zig" },
         .{ .source = "src/provider/geforce_now/provider_protocol.zig" },
         .{ .source = "src/provider/geforce_now/signaling_protocol.zig" },
@@ -585,6 +686,7 @@ pub fn build(b: *std.Build) void {
             .source = "src/provider/geforce_now/webrtc_session.zig",
             .project_includes = true,
             .sdl = true,
+            .imports = &.{.{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" }},
         },
     };
     for (tests) |test_config|
@@ -596,6 +698,19 @@ pub fn build(b: *std.Build) void {
             test_config.sdl,
             test_config.imports,
         );
+
+    const http_test = b.addTest(.{
+        .root_source_file = b.path("tests/http_client_test.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    http_test.addIncludePath(b.path("src/net"));
+    http_test.addCSourceFile(.{ .file = b.path("src/net/http_client.c"), .flags = c_test_flags });
+    http_test.linkLibC();
+    http_test.linkSystemLibrary("curl");
+    const run_http_test = b.addRunArtifact(http_test);
+    run_http_test.setEnvironmentVariable("NO_PROXY", "127.0.0.1,localhost");
+    test_step.dependOn(&run_http_test.step);
 
     const video_decoder_object =
         addHostZigObject(b, "video-decoder", "src/media/video/video_decoder.zig");
@@ -704,4 +819,12 @@ pub fn build(b: *std.Build) void {
     const run_mpp_decoder_test = b.addRunArtifact(mpp_decoder_test);
     run_mpp_decoder_test.addArtifactArg(fake_mpp_valid);
     test_step.dependOn(&run_mpp_decoder_test.step);
+
+    const bootstrap_tests = b.addTest(.{
+        .root_source_file = b.path("src/media/video/bootstrap_cache.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    addZigImport(b, bootstrap_tests.root_module, b.graph.host, .Debug, "h264_depacketizer", "src/media/rtp/h264_depacketizer.zig");
+    test_step.dependOn(&b.addRunArtifact(bootstrap_tests).step);
 }

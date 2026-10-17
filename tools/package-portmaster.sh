@@ -14,6 +14,8 @@ MPP_PROBE="$ROOT/zig-out/rockchip/greenovercast-mpp-probe.aarch64"
 AVCODEC="$ROOT/zig-out/bin/libavcodec.so.63"
 AVUTIL="$ROOT/zig-out/bin/libavutil.so.61"
 SWSCALE="$ROOT/zig-out/bin/libswscale.so.10"
+AVFORMAT="$ROOT/zig-out/bin/libavformat.so.63"
+SWRESAMPLE="$ROOT/zig-out/bin/libswresample.so.7"
 
 case "$OUTPUT" in
 /*) ;;
@@ -34,12 +36,16 @@ for mpp_file in "$MPP_PLUGIN" "$MPP_RUNTIME" "$MPP_PROBE"; do
     exit 1
   }
 done
-for private_library in "$AVCODEC" "$AVUTIL" "$SWSCALE"; do
+for private_library in "$AVCODEC" "$AVUTIL" "$SWSCALE" "$AVFORMAT" "$SWRESAMPLE"; do
   [ -f "$private_library" ] || {
     echo "missing private library: $private_library" >&2
     exit 1
   }
 done
+sh "$ROOT/tools/check-aarch64-runtime.sh" \
+  "$BINARY" "$CEDAR" "$MPP_PLUGIN" "$MPP_RUNTIME" "$MPP_PROBE" \
+  "$AVCODEC" "$AVUTIL" "$SWSCALE" "$AVFORMAT" "$SWRESAMPLE"
+
 [ -n "$PORTMASTER_NEW" ] || {
   echo "set PORTMASTER_NEW to a current PortMaster-New checkout" >&2
   exit 1
@@ -75,6 +81,8 @@ cp "$ROOT/vendor/mpp/LICENSES/MIT" \
 cp "$AVCODEC" "$port/greenovercast/libavcodec.so.63"
 cp "$AVUTIL" "$port/greenovercast/libavutil.so.61"
 cp "$SWSCALE" "$port/greenovercast/libswscale.so.10"
+cp "$AVFORMAT" "$port/greenovercast/libavformat.so.63"
+cp "$SWRESAMPLE" "$port/greenovercast/libswresample.so.7"
 find "$port" -type f -exec chmod 644 {} +
 : >"$checker/.github_check"
 
@@ -118,6 +126,8 @@ required = {
     "greenovercast/libavcodec.so.63",
     "greenovercast/libavutil.so.61",
     "greenovercast/libswscale.so.10",
+    "greenovercast/libavformat.so.63",
+    "greenovercast/libswresample.so.7",
 }
 expected_hashes = {
     "greenovercast/rocknix/h700/greenovercast_h700_overlay.ko":

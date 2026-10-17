@@ -11,6 +11,9 @@ pub var polls: usize = 0;
 pub var cancelled = false;
 pub var cancel_on_poll: usize = 1;
 pub var response: ?*Response = null;
+pub var on_request: ?*const fn ([]const u8, []const u8) void = null;
+pub var last_body: [8192]u8 = undefined;
+pub var last_body_length: usize = 0;
 
 pub fn reset() void {
     requests = 0;
@@ -18,6 +21,8 @@ pub fn reset() void {
     cancelled = false;
     cancel_on_poll = 1;
     response = null;
+    on_request = null;
+    last_body_length = 0;
 }
 
 var no_content = Response{ .data = null, .len = 0, .status = 204 };
@@ -54,9 +59,9 @@ pub fn authClient(comptime Client: type) Client {
 }
 
 export fn go_http_request_bounded_cancelable(
-    _: [*:0]const u8,
-    _: [*:0]const u8,
-    _: ?[*:0]const u8,
+    method: [*:0]const u8,
+    url: [*:0]const u8,
+    body: ?[*:0]const u8,
     _: ?[*]const [*:0]const u8,
     _: c_int,
     _: usize,
@@ -67,6 +72,13 @@ export fn go_http_request_bounded_cancelable(
     if (cancel) |check| {
         if (check(context) != 0) return null;
     }
+    const body_slice = if (body) |value| std.mem.span(value) else null;
+    if (body_slice) |data| {
+        if (data.len > last_body.len) return null;
+        @memcpy(last_body[0..data.len], data);
+        last_body_length = data.len;
+    }
+    if (on_request) |handler| handler(std.mem.span(method), std.mem.span(url));
     return response;
 }
 

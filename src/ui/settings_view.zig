@@ -4,6 +4,7 @@ const navigation = @import("navigation_repeat.zig");
 const font = @import("pixel_font.zig");
 const provider_badge = @import("provider_badge.zig");
 const settings = @import("persistent_settings.zig");
+const gfn_stream_preferences = @import("gfn_stream_preferences");
 const style = @import("view_style.zig");
 
 const c = @cImport({
@@ -29,7 +30,14 @@ const Row = enum {
     sign_out,
 };
 
-const bitrate_choices = settings.bitrate_choices_kbps;
+const bitrate_choices = gfn_stream_preferences.bitrate_choices_kbps;
+
+fn rowsFor(provider: provider_badge.Provider) []const Row {
+    return switch (provider) {
+        .xbox => &.{ .face_buttons, .artwork, .service, .sign_out },
+        .geforce_now => &.{ .face_buttons, .artwork, .framerate, .bitrate, .service, .sign_out },
+    };
+}
 
 fn nextBitrate(current: u32) u32 {
     for (bitrate_choices, 0..) |value, index| {
@@ -65,10 +73,10 @@ pub fn run(
             if (event.type == c.SDL_QUIT) return .cancelled;
             if (event.type == c.SDL_KEYDOWN) switch (event.key.keysym.sym) {
                 c.SDLK_ESCAPE => return .back,
-                c.SDLK_UP => selected = previousRow(selected),
-                c.SDLK_DOWN => selected = nextRow(selected),
+                c.SDLK_UP => selected = previousRow(provider, selected),
+                c.SDLK_DOWN => selected = nextRow(provider, selected),
                 c.SDLK_RETURN => {
-                    const action = activate(selected, controller, store);
+                    const action = activate(selected, controller, store, provider);
                     if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
                         return result;
                     dirty = true;
@@ -83,22 +91,22 @@ pub fn run(
                 switch (button) {
                     c.SDL_CONTROLLER_BUTTON_B => return .back,
                     c.SDL_CONTROLLER_BUTTON_A => {
-                        const action = activate(selected, controller, store);
+                        const action = activate(selected, controller, store, provider);
                         if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
                             return result;
                         dirty = true;
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_UP => {
-                        selected = previousRow(selected);
+                        selected = previousRow(provider, selected);
                         repeat.begin(.up, c.SDL_GetTicks());
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_DOWN => {
-                        selected = nextRow(selected);
+                        selected = nextRow(provider, selected);
                         repeat.begin(.down, c.SDL_GetTicks());
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_LEFT, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT => {
                         if (selected != .service and selected != .sign_out)
-                            _ = activate(selected, controller, store);
+                            _ = activate(selected, controller, store, provider);
                     },
                     else => {},
                 }
@@ -111,11 +119,11 @@ pub fn run(
         const direction = heldDirection(controller, &axis_latch);
         if (repeat.update(direction, c.SDL_GetTicks())) {
             if (direction == .up) {
-                selected = previousRow(selected);
+                selected = previousRow(provider, selected);
                 dirty = true;
             }
             if (direction == .down) {
-                selected = nextRow(selected);
+                selected = nextRow(provider, selected);
                 dirty = true;
             }
         }
@@ -131,6 +139,7 @@ fn activate(
     row: Row,
     controller: *c.GoControllerInput,
     store: *settings.Store,
+    provider: provider_badge.Provider,
 ) Action {
     switch (row) {
         .face_buttons => {
@@ -141,13 +150,22 @@ fn activate(
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
-        .framerate => store.frames_per_second = if (store.frames_per_second >= 60) 30 else 60,
-        .bitrate => store.max_bitrate_kbps = nextBitrate(store.max_bitrate_kbps),
+        .framerate, .bitrate => if (!changeStreamQuality(row, provider, store)) return .none,
         .service => return .switch_provider,
         .sign_out => return .sign_out,
     }
     store.save() catch std.debug.print("Settings could not be saved\n", .{});
     return .none;
+}
+
+fn changeStreamQuality(row: Row, provider: provider_badge.Provider, store: *settings.Store) bool {
+    if (provider != .geforce_now) return false;
+    switch (row) {
+        .framerate => store.geforce_now.frames_per_second = if (store.geforce_now.frames_per_second == 60) 30 else 60,
+        .bitrate => store.geforce_now.max_bitrate_kbps = nextBitrate(store.geforce_now.max_bitrate_kbps),
+        else => return false,
+    }
+    return true;
 }
 
 fn resolveAction(
@@ -174,26 +192,16 @@ fn resolveAction(
     };
 }
 
-fn previousRow(row: Row) Row {
-    return switch (row) {
-        .face_buttons => .sign_out,
-        .artwork => .face_buttons,
-        .framerate => .artwork,
-        .bitrate => .framerate,
-        .service => .bitrate,
-        .sign_out => .service,
-    };
+fn previousRow(provider: provider_badge.Provider, row: Row) Row {
+    const rows = rowsFor(provider);
+    const index = std.mem.indexOfScalar(Row, rows, row) orelse return rows[0];
+    return rows[(index + rows.len - 1) % rows.len];
 }
 
-fn nextRow(row: Row) Row {
-    return switch (row) {
-        .face_buttons => .artwork,
-        .artwork => .framerate,
-        .framerate => .bitrate,
-        .bitrate => .service,
-        .service => .sign_out,
-        .sign_out => .face_buttons,
-    };
+fn nextRow(provider: provider_badge.Provider, row: Row) Row {
+    const rows = rowsFor(provider);
+    const index = std.mem.indexOfScalar(Row, rows, row) orelse return rows[0];
+    return rows[(index + 1) % rows.len];
 }
 
 fn heldDirection(controller: *c.GoControllerInput, latch: *navigation.AxisLatch) navigation.Direction {
@@ -220,21 +228,28 @@ fn draw(
     _ = c.SDL_RenderFillRect(renderer, &header);
     _ = c.SDL_RenderFillRect(renderer, &footer);
     font.text(renderer, 18, 14, 4, "SETTINGS", style.bright());
+    provider_badge.draw(renderer, provider);
 
     var fps_buffer: [16]u8 = undefined;
-    const fps_text = std.fmt.bufPrintZ(&fps_buffer, "{d} FPS", .{store.frames_per_second}) catch "30 FPS";
+    const fps_text = std.fmt.bufPrintZ(&fps_buffer, "{d} FPS", .{store.geforce_now.frames_per_second}) catch unreachable;
     var bitrate_buffer: [16]u8 = undefined;
-    const bitrate_text = std.fmt.bufPrintZ(&bitrate_buffer, "{d} MBPS", .{store.max_bitrate_kbps / 1000}) catch "6 MBPS";
+    const bitrate_text = std.fmt.bufPrintZ(&bitrate_buffer, "{d} MBPS", .{store.geforce_now.max_bitrate_kbps / 1000}) catch unreachable;
 
-    drawRow(renderer, 82, "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED", selected == .face_buttons);
-    drawRow(renderer, 128, "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF", selected == .artwork);
-    drawRow(renderer, 174, "TARGET FRAMERATE", fps_text, selected == .framerate);
-    drawRow(renderer, 220, "MAX BITRATE", bitrate_text, selected == .bitrate);
-    drawRow(renderer, 266, "STREAMING SERVICE", if (provider == .xbox) "XBOX" else "GEFORCE NOW", selected == .service);
-    drawRow(renderer, 312, "ACCOUNT", "SIGN OUT", selected == .sign_out);
+    for (rowsFor(provider), 0..) |row, index| {
+        const label: [*:0]const u8, const value: [*:0]const u8 = switch (row) {
+            .face_buttons => .{ "FACE BUTTONS", if (store.face_buttons == .system) "SYSTEM" else "SWAPPED" },
+            .artwork => .{ "GAME ARTWORK", if (store.artwork_enabled) "ON" else "OFF" },
+            .framerate => .{ "TARGET FRAMERATE", fps_text },
+            .bitrate => .{ "MAX BITRATE", bitrate_text },
+            .service => .{ "STREAMING SERVICE", if (provider == .xbox) "XBOX" else "GEFORCE NOW" },
+            .sign_out => .{ "ACCOUNT", "SIGN OUT" },
+        };
+        drawRow(renderer, 82 + @as(c_int, @intCast(index)) * 46, label, value, selected == row);
+    }
 
     drawMappingExplanation(renderer, store.face_buttons);
-    font.text(renderer, 18, 366, 2, "FRAMERATE AND BITRATE APPLY ON NEXT STREAM", style.muted());
+    if (provider == .geforce_now)
+        font.text(renderer, 18, 366, 2, "QUALITY APPLIES TO THE NEXT GFN STREAM", style.muted());
     const prompts = [_]controls.Prompt{
         controls.Prompt.one(controls.face(store.face_buttons, .a), "CHANGE"),
         controls.Prompt.one(.dpad, "MOVE"),
@@ -276,6 +291,60 @@ fn drawMappingExplanation(renderer: *c.SDL_Renderer, mode: settings.FaceButtonMo
         controls.drawSwapPair(renderer, 390, 176, .a, .b, style.accent());
         controls.drawSwapPair(renderer, 390, 208, .x, .y, style.accent());
     }
+    font.text(renderer, 390, 270, 2, "USE SWAPPED", style.muted());
+    font.text(renderer, 390, 292, 2, "ONLY IF BUTTONS", style.muted());
+    font.text(renderer, 390, 314, 2, "ARE REVERSED", style.muted());
+}
+
+test "provider navigation visits only visible settings rows" {
+    for ([_]provider_badge.Provider{ .xbox, .geforce_now }) |provider| {
+        const rows = rowsFor(provider);
+        for (rows, 0..) |row, index| {
+            try std.testing.expectEqual(rows[(index + 1) % rows.len], nextRow(provider, row));
+            try std.testing.expectEqual(rows[(index + rows.len - 1) % rows.len], previousRow(provider, row));
+        }
+    }
+    try std.testing.expectEqualSlices(Row, &.{ .face_buttons, .artwork, .service, .sign_out }, rowsFor(.xbox));
+    try std.testing.expectEqualSlices(Row, &.{ .face_buttons, .artwork, .framerate, .bitrate, .service, .sign_out }, rowsFor(.geforce_now));
+}
+
+test "Xbox settings cannot change GFN quality" {
+    var store = settings.Store{};
+    const before = store.geforce_now;
+    try std.testing.expect(!changeStreamQuality(.framerate, .xbox, &store));
+    try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store));
+    try std.testing.expectEqualDeep(before, store.geforce_now);
+    try std.testing.expect(changeStreamQuality(.framerate, .geforce_now, &store));
+    try std.testing.expectEqual(@as(u16, 60), store.geforce_now.frames_per_second);
+    try std.testing.expect(changeStreamQuality(.bitrate, .geforce_now, &store));
+    try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
+    try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store));
+    try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
+    for (0..bitrate_choices.len) |_| _ = changeStreamQuality(.bitrate, .geforce_now, &store);
+    try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
+    _ = changeStreamQuality(.framerate, .geforce_now, &store);
+    try std.testing.expectEqual(@as(u16, 30), store.geforce_now.frames_per_second);
+    try std.testing.expectEqual(settings.FaceButtonMode.system, store.face_buttons);
+    try std.testing.expect(store.artwork_enabled);
+}
+
+test "settings render only the active provider's rows" {
+    const surface = c.SDL_CreateRGBSurfaceWithFormat(0, 640, 480, 32, c.SDL_PIXELFORMAT_RGBA32) orelse return error.SurfaceCreationFailed;
+    defer c.SDL_FreeSurface(surface);
+    const renderer = c.SDL_CreateSoftwareRenderer(surface) orelse return error.RendererCreationFailed;
+    defer c.SDL_DestroyRenderer(renderer);
+    const store = settings.Store{};
+    const accent = style.accent();
+    const selected_pixel = c.SDL_MapRGBA(surface.*.format, accent.r, accent.g, accent.b, accent.a);
+    const pixels: [*]const u32 = @ptrCast(@alignCast(surface.*.pixels));
+    const stride: usize = @intCast(@divExact(surface.*.pitch, 4));
+
+    draw(renderer, &store, .xbox, .service);
+    try std.testing.expectEqual(selected_pixel, pixels[175 * stride + 20]);
+    try std.testing.expect(pixels[267 * stride + 20] != selected_pixel);
+    draw(renderer, &store, .geforce_now, .service);
+    try std.testing.expect(pixels[175 * stride + 20] != selected_pixel);
+    try std.testing.expectEqual(selected_pixel, pixels[267 * stride + 20]);
 }
 
 fn confirmSignOut(

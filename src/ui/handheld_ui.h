@@ -47,6 +47,8 @@ int go_handheld_ui_pick_provider(GoHandheldUi* ui);
 void go_handheld_ui_set_provider(GoHandheldUi* ui, GoHandheldUiProvider provider);
 int go_handheld_ui_wait(GoHandheldUi* ui, Uint32 milliseconds);
 int go_handheld_ui_cancel_requested(GoHandheldUi* ui);
+int go_handheld_ui_ad_action(GoHandheldUi* ui);
+void go_handheld_ui_draw_ad_hint(GoHandheldUi* ui, int modal);
 int go_handheld_ui_quit_requested(const GoHandheldUi* ui);
 int go_handheld_ui_sign_in_action(GoHandheldUi* ui);
 int go_handheld_ui_wait_for_retry(GoHandheldUi* ui, const char* heading, const char* detail);
@@ -56,8 +58,8 @@ int go_handheld_ui_pick_title(GoHandheldUi* ui, const GoCatalogTitle* titles, in
 int go_handheld_ui_cancelled(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_width(const GoHandheldUi* ui);
 unsigned int go_handheld_ui_stream_height(const GoHandheldUi* ui);
-unsigned int go_handheld_ui_frames_per_second(const GoHandheldUi* ui);
-unsigned int go_handheld_ui_max_bitrate_kbps(const GoHandheldUi* ui);
+unsigned int go_handheld_ui_gfn_frames_per_second(const GoHandheldUi* ui);
+unsigned int go_handheld_ui_gfn_max_bitrate_kbps(const GoHandheldUi* ui);
 void go_handheld_ui_draw_stream_controls(GoHandheldUi* ui, int mouse_mode, float pointer_x,
                                          float pointer_y, int source_width, int source_height,
                                          int show_hint);

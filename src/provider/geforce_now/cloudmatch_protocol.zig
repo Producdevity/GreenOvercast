@@ -1,5 +1,6 @@
 const std = @import("std");
 const endpoint = @import("endpoint.zig");
+const ad_protocol = @import("ad_protocol.zig");
 
 pub const IceServer = struct {
     urls: [][]u8,
@@ -24,6 +25,7 @@ pub const Session = struct {
     media_ip: ?[]u8,
     media_port: ?u16,
     ice_servers: []IceServer,
+    ads: ?ad_protocol.Admission = null,
 
     pub fn ready(self: *const Session) bool {
         return self.status == 2 or self.status == 3;
@@ -35,6 +37,7 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Session) void {
+        if (self.ads) |*ads| ads.deinit();
         self.allocator.free(self.id);
         if (self.signaling_url) |value| self.allocator.free(value);
         if (self.media_ip) |value| self.allocator.free(value);
@@ -371,6 +374,7 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
         .media_ip = media_ip,
         .media_port = media_port,
         .ice_servers = ice_servers,
+        .ads = try ad_protocol.parse(allocator, session),
     };
 }
 
@@ -768,6 +772,24 @@ test "accepts a queued response before connection details are assigned" {
     try std.testing.expectEqual(@as(u32, 0), session.status);
     try std.testing.expectEqual(@as(?u32, 42), session.queue_position);
     try std.testing.expectEqual(@as(?[]u8, null), session.signaling_url);
+}
+
+test "numeric and structured control addresses preserve signaling and ad admission" {
+    for ([_][]const u8{ "3405803787", "{\"value\":\"203.0.113.11\"}" }) |ip| {
+        for ([_]bool{ false, true }) |required| {
+            const bytes = try std.fmt.allocPrint(
+                std.testing.allocator,
+                "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,\"sessionAdsRequired\":{},\"sessionControlInfo\":{{\"ip\":{s}}}}}}}",
+                .{ required, ip },
+            );
+            defer std.testing.allocator.free(bytes);
+            var session = try parseSession(std.testing.allocator, bytes);
+            defer session.deinit();
+            try std.testing.expectEqualStrings("wss://203.0.113.11:443/nvst/", session.signaling_url.?);
+            try std.testing.expectEqual(required, session.ads.?.required);
+            try std.testing.expect(session.ads.?.control_base == null);
+        }
+    }
 }
 
 test "ignores queue values outside the supported range" {
