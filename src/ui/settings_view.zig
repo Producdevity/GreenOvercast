@@ -32,6 +32,8 @@ const Row = enum {
 
 const bitrate_choices = gfn_stream_preferences.bitrate_choices_kbps;
 
+const Adjustment = enum { decrease, increase };
+
 fn rowsFor(provider: provider_badge.Provider) []const Row {
     return switch (provider) {
         .xbox => &.{ .face_buttons, .artwork, .service, .sign_out },
@@ -39,11 +41,10 @@ fn rowsFor(provider: provider_badge.Provider) []const Row {
     };
 }
 
-fn nextBitrate(current: u32) u32 {
-    for (bitrate_choices, 0..) |value, index| {
-        if (value == current) return bitrate_choices[(index + 1) % bitrate_choices.len];
-    }
-    return bitrate_choices[0];
+fn adjustBitrate(current: u32, adjustment: Adjustment) u32 {
+    const index = std.mem.indexOfScalar(u32, &bitrate_choices, current) orelse return bitrate_choices[0];
+    const offset: usize = if (adjustment == .decrease) bitrate_choices.len - 1 else 1;
+    return bitrate_choices[(index + offset) % bitrate_choices.len];
 }
 
 const Action = enum {
@@ -76,7 +77,7 @@ pub fn run(
                 c.SDLK_UP => selected = previousRow(provider, selected),
                 c.SDLK_DOWN => selected = nextRow(provider, selected),
                 c.SDLK_RETURN => {
-                    const action = activate(selected, controller, store, provider);
+                    const action = activate(selected, controller, store, provider, .increase);
                     if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
                         return result;
                     dirty = true;
@@ -91,7 +92,7 @@ pub fn run(
                 switch (button) {
                     c.SDL_CONTROLLER_BUTTON_B => return .back,
                     c.SDL_CONTROLLER_BUTTON_A => {
-                        const action = activate(selected, controller, store, provider);
+                        const action = activate(selected, controller, store, provider, .increase);
                         if (resolveAction(action, renderer, controller, store.face_buttons, stop_requested, stop_context)) |result|
                             return result;
                         dirty = true;
@@ -105,8 +106,10 @@ pub fn run(
                         repeat.begin(.down, c.SDL_GetTicks());
                     },
                     c.SDL_CONTROLLER_BUTTON_DPAD_LEFT, c.SDL_CONTROLLER_BUTTON_DPAD_RIGHT => {
-                        if (selected != .service and selected != .sign_out)
-                            _ = activate(selected, controller, store, provider);
+                        if (selected != .service and selected != .sign_out) {
+                            const adjustment: Adjustment = if (button == c.SDL_CONTROLLER_BUTTON_DPAD_LEFT) .decrease else .increase;
+                            _ = activate(selected, controller, store, provider, adjustment);
+                        }
                     },
                     else => {},
                 }
@@ -140,6 +143,7 @@ fn activate(
     controller: *c.GoControllerInput,
     store: *settings.Store,
     provider: provider_badge.Provider,
+    adjustment: Adjustment,
 ) Action {
     switch (row) {
         .face_buttons => {
@@ -150,7 +154,7 @@ fn activate(
             );
         },
         .artwork => store.artwork_enabled = !store.artwork_enabled,
-        .framerate, .bitrate => if (!changeStreamQuality(row, provider, store)) return .none,
+        .framerate, .bitrate => if (!changeStreamQuality(row, provider, store, adjustment)) return .none,
         .service => return .switch_provider,
         .sign_out => return .sign_out,
     }
@@ -158,11 +162,11 @@ fn activate(
     return .none;
 }
 
-fn changeStreamQuality(row: Row, provider: provider_badge.Provider, store: *settings.Store) bool {
+fn changeStreamQuality(row: Row, provider: provider_badge.Provider, store: *settings.Store, adjustment: Adjustment) bool {
     if (provider != .geforce_now) return false;
     switch (row) {
         .framerate => store.geforce_now.frames_per_second = if (store.geforce_now.frames_per_second == 60) 30 else 60,
-        .bitrate => store.geforce_now.max_bitrate_kbps = nextBitrate(store.geforce_now.max_bitrate_kbps),
+        .bitrate => store.geforce_now.max_bitrate_kbps = adjustBitrate(store.geforce_now.max_bitrate_kbps, adjustment),
         else => return false,
     }
     return true;
@@ -311,18 +315,40 @@ test "provider navigation visits only visible settings rows" {
 test "Xbox settings cannot change GFN quality" {
     var store = settings.Store{};
     const before = store.geforce_now;
-    try std.testing.expect(!changeStreamQuality(.framerate, .xbox, &store));
-    try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store));
+    for ([_]Adjustment{ .decrease, .increase }) |adjustment| {
+        try std.testing.expect(!changeStreamQuality(.framerate, .xbox, &store, adjustment));
+        try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store, adjustment));
+    }
     try std.testing.expectEqualDeep(before, store.geforce_now);
-    try std.testing.expect(changeStreamQuality(.framerate, .geforce_now, &store));
+    try std.testing.expect(changeStreamQuality(.framerate, .geforce_now, &store, .increase));
     try std.testing.expectEqual(@as(u16, 60), store.geforce_now.frames_per_second);
-    try std.testing.expect(changeStreamQuality(.bitrate, .geforce_now, &store));
+    try std.testing.expect(changeStreamQuality(.bitrate, .geforce_now, &store, .increase));
     try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
-    try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store));
+    try std.testing.expect(!changeStreamQuality(.bitrate, .xbox, &store, .decrease));
     try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
-    for (0..bitrate_choices.len) |_| _ = changeStreamQuality(.bitrate, .geforce_now, &store);
+    for (0..bitrate_choices.len) |_| _ = changeStreamQuality(.bitrate, .geforce_now, &store, .increase);
     try std.testing.expectEqual(@as(u32, 8000), store.geforce_now.max_bitrate_kbps);
-    _ = changeStreamQuality(.framerate, .geforce_now, &store);
+    _ = changeStreamQuality(.framerate, .geforce_now, &store, .decrease);
+    try std.testing.expectEqual(@as(u16, 30), store.geforce_now.frames_per_second);
+    try std.testing.expectEqual(settings.FaceButtonMode.system, store.face_buttons);
+    try std.testing.expect(store.artwork_enabled);
+}
+
+test "bitrate adjustments follow direction and wrap at both ends" {
+    for (bitrate_choices, 0..) |value, index| {
+        const lower = bitrate_choices[(index + bitrate_choices.len - 1) % bitrate_choices.len];
+        const higher = bitrate_choices[(index + 1) % bitrate_choices.len];
+        try std.testing.expectEqual(lower, adjustBitrate(value, .decrease));
+        try std.testing.expectEqual(higher, adjustBitrate(value, .increase));
+        try std.testing.expectEqual(value, adjustBitrate(lower, .increase));
+        try std.testing.expectEqual(value, adjustBitrate(higher, .decrease));
+    }
+    var store = settings.Store{};
+    store.geforce_now.max_bitrate_kbps = 4000;
+    try std.testing.expect(changeStreamQuality(.bitrate, .geforce_now, &store, .decrease));
+    try std.testing.expectEqual(@as(u32, 20000), store.geforce_now.max_bitrate_kbps);
+    try std.testing.expect(changeStreamQuality(.bitrate, .geforce_now, &store, .increase));
+    try std.testing.expectEqual(@as(u32, 4000), store.geforce_now.max_bitrate_kbps);
     try std.testing.expectEqual(@as(u16, 30), store.geforce_now.frames_per_second);
     try std.testing.expectEqual(settings.FaceButtonMode.system, store.face_buttons);
     try std.testing.expect(store.artwork_enabled);
