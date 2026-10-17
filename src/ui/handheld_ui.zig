@@ -5,6 +5,7 @@ const keyboard = @import("keyboard.zig");
 const library = @import("library_view.zig");
 const navigation = @import("navigation_repeat.zig");
 const persistent = @import("persistent_settings.zig");
+const port_shortcut = @import("port_shortcut.zig");
 const provider_picker = @import("provider_picker.zig");
 const provider_badge = @import("provider_badge.zig");
 const font = @import("pixel_font.zig");
@@ -34,6 +35,9 @@ const Ui = struct {
     quit_requested: bool = false,
     stream_width: u32,
     stream_height: u32,
+    port_launcher: ?[]const u8 = null,
+    port_artwork_dir: ?[]const u8 = null,
+    autostart: bool = false,
 };
 
 pub export fn go_handheld_ui_draw_stream_controls(ui: ?*Ui, mouse_mode: c_int, x: f32, y: f32, width: c_int, height: c_int, show_hint: c_int) void {
@@ -402,9 +406,87 @@ fn updateArtwork(ui: *Ui, view: *const library.View, state: *ArtworkSelection) ?
     return ui.artwork.textureFor(ui.renderer, product_id);
 }
 
+/// A shortcut path from the environment, or null unless it is a non-empty absolute path.
+/// openDirAbsolute() asserts on anything else, which would end the app in ReleaseSafe.
+fn absoluteEnvPath(name: [:0]const u8) ?[]const u8 {
+    const value = std.posix.getenv(name) orelse return null;
+    if (value.len == 0 or !std.fs.path.isAbsolute(value)) {
+        std.debug.print("Ignoring {s}: not an absolute path\n", .{name});
+        return null;
+    }
+    return value;
+}
+
+/// Adds the title to the Ports folder as its own launcher, or removes the shortcut if it
+/// already exists. Returns the notice to show (problems in red), or null when shortcuts
+/// are unavailable.
+fn togglePortShortcut(ui: *Ui, title: *const library.Title) ?library.Notice {
+    const launcher = ui.port_launcher orelse return null;
+    const product_id = library.productId(title);
+    var name_buffer: [port_shortcut.name_capacity]u8 = undefined;
+    const name = port_shortcut.portName(&name_buffer, library.titleName(title));
+    if (name.len == 0 or !persistent.validProductId(product_id)) return library.Notice.problem("THIS GAME CANNOT BE ADDED TO PORTS");
+    const ports_path = std.fs.path.dirname(launcher) orelse return library.Notice.problem("PORTS FOLDER NOT FOUND");
+    var ports = std.fs.openDirAbsolute(ports_path, .{}) catch return library.Notice.problem("PORTS FOLDER NOT FOUND");
+    defer ports.close();
+    var artwork_dir: ?std.fs.Dir = if (ui.port_artwork_dir) |path|
+        std.fs.openDirAbsolute(path, .{}) catch |err| blk: {
+            std.debug.print("Port artwork folder unavailable: {s}\n", .{@errorName(err)});
+            break :blk null;
+        }
+    else
+        null;
+    defer if (artwork_dir) |*directory| directory.close();
+
+    var script_buffer: [port_shortcut.name_capacity + 8]u8 = undefined;
+    const script_name = std.fmt.bufPrint(&script_buffer, "{s}.sh", .{name}) catch unreachable;
+    switch (port_shortcut.state(ports, script_name, product_id)) {
+        .shortcut => {
+            // remove() treats a missing folder as "no artwork on this system". A configured
+            // folder that cannot be opened may still hold this shortcut's image, so keep the
+            // shortcut and its record until it can be removed properly.
+            if (ui.port_artwork_dir != null and artwork_dir == null) return library.Notice.problem("SHORTCUT COULD NOT BE REMOVED");
+            port_shortcut.remove(ports, artwork_dir, name, product_id) catch |err| {
+                std.debug.print("Port shortcut could not be removed: {s}\n", .{@errorName(err)});
+                return library.Notice.problem("SHORTCUT COULD NOT BE REMOVED");
+            };
+            std.debug.print("Removed port shortcut: {s}\n", .{name});
+            return .{ .text = "REMOVED FROM PORTS" };
+        },
+        .foreign => return library.Notice.problem("A PORT WITH THIS NAME ALREADY EXISTS"),
+        .absent => {},
+    }
+
+    const cover = if (artwork_dir != null) ui.artwork.cachedCoverPng(std.heap.c_allocator, product_id) else null;
+    defer if (cover) |png| std.heap.c_allocator.free(png);
+    port_shortcut.add(ports, artwork_dir, .{
+        .launcher = launcher,
+        .service = switch (ui.provider) {
+            .xbox => .xbox,
+            .geforce_now => .geforce_now,
+        },
+        .product_id = product_id,
+    }, name, cover) catch |err| {
+        std.debug.print("Port shortcut could not be saved: {s}\n", .{@errorName(err)});
+        return library.Notice.problem("SHORTCUT COULD NOT BE SAVED");
+    };
+    std.debug.print("Added port shortcut: {s}{s}\n", .{ name, if (cover == null) " (no artwork)" else "" });
+    return .{ .text = "ADDED TO PORTS" };
+}
+
 fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_int {
     if (titles.len == 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
     ui.cancelled = false;
+    var shortcut_title_missing = false;
+    if (ui.autostart) {
+        ui.autostart = false;
+        if (library.findTitle(titles, requested)) |title_index| {
+            std.debug.print("Starting shortcut title\n", .{});
+            return @intCast(title_index);
+        }
+        std.debug.print("Shortcut title is not in the library\n", .{});
+        shortcut_title_missing = true;
+    }
     const indices = std.heap.c_allocator.alloc(usize, titles.len) catch return c.GO_HANDHELD_UI_PICK_CANCELLED;
     defer std.heap.c_allocator.free(indices);
     var view = library.View{ .titles = titles, .indices = indices };
@@ -416,6 +498,13 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
     var right_trigger_latched = false;
     var artwork_selection = ArtworkSelection{};
     var artwork_texture: ?*anyopaque = null;
+    var select_armed = false;
+    var notice: ?library.Notice = null;
+    var notice_until: c.Uint32 = 0;
+    if (shortcut_title_missing) {
+        notice = library.Notice.problem("SHORTCUT GAME NOT FOUND");
+        notice_until = c.SDL_GetTicks() +% 2500;
+    }
     var dirty = true;
 
     while (true) {
@@ -442,6 +531,9 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                     return c.GO_HANDHELD_UI_PICK_CANCELLED;
                 },
                 c.SDL_CONTROLLER_BUTTON_X => {
+                    // The keyboard consumes Select's release, so a pending press must not
+                    // fire on a later release back in the library.
+                    select_armed = false;
                     const preserve = view.selectedTitleIndex();
                     const result = runSearchKeyboard(ui, &view);
                     if (result < 0) return c.GO_HANDHELD_UI_PICK_CANCELLED;
@@ -472,7 +564,11 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                     repeat.begin(.down, c.SDL_GetTicks());
                     dirty = true;
                 },
+                // Select acts on release so the Select + Start exit chord never adds a shortcut.
+                c.SDL_CONTROLLER_BUTTON_BACK => select_armed =
+                    c.go_controller_input_button_pressed(ui.controller, c.SDL_CONTROLLER_BUTTON_START) == 0,
                 c.SDL_CONTROLLER_BUTTON_START => {
+                    select_armed = false;
                     if (c.go_controller_input_button_pressed(ui.controller, c.SDL_CONTROLLER_BUTTON_BACK) != 0)
                         continue;
                     const result = settings_view.run(
@@ -502,6 +598,18 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
                 },
                 else => {},
             };
+            if (event.type == c.SDL_CONTROLLERBUTTONUP and activeControllerEvent(ui, &event) and
+                semanticButton(ui, event.cbutton.button) == c.SDL_CONTROLLER_BUTTON_BACK and select_armed)
+            {
+                select_armed = false;
+                if (view.selectedTitleIndex()) |title_index| {
+                    if (togglePortShortcut(ui, &titles[title_index])) |message| {
+                        notice = message;
+                        notice_until = c.SDL_GetTicks() +% 2500;
+                        dirty = true;
+                    }
+                }
+            }
             if (event.type == c.SDL_CONTROLLERAXISMOTION and activeControllerEvent(ui, &event)) {
                 if (event.caxis.axis == c.SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
                     if (event.caxis.value > 16000 and !left_trigger_latched) {
@@ -544,8 +652,20 @@ fn pickTitle(ui: *Ui, titles: []const library.Title, requested: []const u8) c_in
             artwork_texture = next_artwork_texture;
             dirty = true;
         }
+        if (notice != null and @as(i32, @bitCast(c.SDL_GetTicks() -% notice_until)) >= 0) {
+            notice = null;
+            dirty = true;
+        }
         if (dirty) {
-            library.draw(ui.renderer, &view, &ui.settings, artwork_texture, ui.provider);
+            library.draw(
+                ui.renderer,
+                &view,
+                &ui.settings,
+                artwork_texture,
+                ui.provider,
+                ui.port_launcher != null,
+                notice,
+            );
             dirty = false;
         }
         c.SDL_Delay(16);
@@ -579,6 +699,9 @@ pub export fn go_handheld_ui_create(
     const artwork_cache_path = std.posix.getenv("GREENOVERCAST_ARTWORK_CACHE_DIR");
     ui.artwork.start(if (artwork_cache_path) |path| path else null) catch |err|
         std.debug.print("Artwork loading disabled: {s}\n", .{@errorName(err)});
+    ui.port_launcher = absoluteEnvPath("GREENOVERCAST_PORT_LAUNCHER");
+    ui.port_artwork_dir = absoluteEnvPath("GREENOVERCAST_PORT_ARTWORK_DIR");
+    ui.autostart = if (std.posix.getenv("GREENOVERCAST_AUTOSTART")) |value| std.mem.eql(u8, value, "1") else false;
     c.go_controller_input_set_face_button_mode(
         controller_handle,
         if (stored.face_buttons == .system) c.GO_FACE_BUTTON_MODE_SYSTEM else c.GO_FACE_BUTTON_MODE_SWAPPED,

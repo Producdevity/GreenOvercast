@@ -608,6 +608,8 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/ui/control_icons.zig" },
         .{ .source = "src/ui/navigation_repeat.zig" },
         .{ .source = "src/ui/persistent_settings.zig" },
+        .{ .source = "src/ui/port_shortcut.zig" },
+        .{ .source = "src/ui/cover_image.zig" },
         .{ .source = "src/ui/stream_dimensions.zig" },
         .{ .source = "src/media/rtp/h264_depacketizer.zig" },
         .{ .source = "src/net/json_reader.zig" },

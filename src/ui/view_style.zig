@@ -40,6 +40,11 @@ pub fn warning() Color {
     return .{ .r = 224, .g = 137, .b = 105, .a = 255 };
 }
 
+/// For messages the player has to act on, such as a shortcut whose game is gone.
+pub fn danger() Color {
+    return .{ .r = 235, .g = 87, .b = 87, .a = 255 };
+}
+
 pub fn setColor(renderer_pointer: *anyopaque, color: Color) void {
     const renderer: *c.SDL_Renderer = @ptrCast(@alignCast(renderer_pointer));
     _ = c.SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);

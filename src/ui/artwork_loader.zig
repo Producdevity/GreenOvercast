@@ -1,5 +1,6 @@
 const std = @import("std");
 const settings = @import("persistent_settings.zig");
+const cover_image = @import("cover_image.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -37,6 +38,57 @@ pub const Loader = struct {
             self.cache_dir_length = path.len;
         }
         self.thread = try std.Thread.spawn(.{}, worker, .{self});
+    }
+
+    /// Converts a title's cached artwork into a PNG sized for port frontends. Returns
+    /// null when the artwork has not been cached yet.
+    ///
+    /// Runs on the caller's thread. It is only called when the player adds a shortcut,
+    /// and cached artwork is requested at w=256 (GeForce NOW) or 320x480 (Xbox), so the
+    /// decode, resize and encode are a one-off cost rather than per-frame work.
+    pub fn cachedCoverPng(self: *const Loader, allocator: std.mem.Allocator, product_id: []const u8) ?[]u8 {
+        if (!settings.validProductId(product_id)) return null;
+        var path_buffer: [640]u8 = undefined;
+        const path = cachePath(self, product_id, &path_buffer) orelse return null;
+        // Not readFileAlloc: it sizes the buffer with File.stat(), which needs statx and
+        // fails on the 4.9 kernels these handhelds ship (see stat_compat.zig).
+        const data = readCache(allocator, path) catch |err| {
+            if (err != error.FileNotFound)
+                std.debug.print("Shortcut artwork unavailable: {s}\n", .{@errorName(err)});
+            return null;
+        };
+        defer allocator.free(data);
+        var image = std.mem.zeroes(c.GoArtworkImage);
+        if (c.go_artwork_decode_jpeg(data.ptr, data.len, 1024, 1024, &image) != 0) {
+            std.debug.print("Shortcut artwork could not be decoded\n", .{});
+            return null;
+        }
+        defer c.go_artwork_image_destroy(&image);
+        const width: usize = @intCast(image.width);
+        const height: usize = @intCast(image.height);
+        const stride: usize = @intCast(image.stride);
+        const fitted = cover_image.fitWithin(
+            allocator,
+            image.pixels[0 .. stride * height],
+            width,
+            height,
+            stride,
+            cover_image.box_width,
+            cover_image.box_height,
+        ) catch |err| {
+            std.debug.print("Shortcut artwork could not be resized ({d}x{d}, stride {d}): {s}\n", .{
+                width,
+                height,
+                stride,
+                @errorName(err),
+            });
+            return null;
+        };
+        defer fitted.deinit(allocator);
+        return cover_image.encodePng(allocator, fitted) catch |err| {
+            std.debug.print("Shortcut artwork could not be encoded: {s}\n", .{@errorName(err)});
+            return null;
+        };
     }
 
     pub fn request(self: *Loader, product_id: []const u8, url: []const u8) void {
@@ -243,6 +295,12 @@ fn cachePath(loader: *const Loader, product_id: []const u8, output: []u8) ?[]con
         "{s}/{s}.jpg",
         .{ loader.cache_dir[0..loader.cache_dir_length], product_id },
     ) catch null;
+}
+
+fn readCache(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    return file.readToEndAlloc(allocator, response_limit);
 }
 
 fn writeCache(path: []const u8, data: []const u8) void {
