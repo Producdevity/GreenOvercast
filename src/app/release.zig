@@ -506,6 +506,10 @@ pub const Release = struct {
                 std.mem.sliceTo(&self.title_name, 0),
                 requested_width,
                 requested_height,
+                .{
+                    .frames_per_second = @intCast(c.go_handheld_ui_gfn_frames_per_second(self.ui())),
+                    .max_bitrate_kbps = c.go_handheld_ui_gfn_max_bitrate_kbps(self.ui()),
+                },
             ) catch |err| {
                 if (err == error.Cancelled) return .cancelled;
                 std.debug.print("GeForce NOW session creation failed: {s}\n", .{@errorName(err)});
@@ -577,6 +581,7 @@ pub const Release = struct {
                 self.geforce_cloud.?.streamWidth(),
                 self.geforce_cloud.?.streamHeight(),
                 self.geforce_cloud.?.streamFramesPerSecond(),
+                self.geforce_cloud.?.stream_preferences.max_bitrate_kbps,
             ) catch return .failed;
             self.geforce_webrtc.?.setup() catch |err| {
                 if (err == error.Cancelled) return .cancelled;

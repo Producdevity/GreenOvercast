@@ -5,6 +5,7 @@ const keyboard = @import("keyboard.zig");
 const library = @import("library_view.zig");
 const navigation = @import("navigation_repeat.zig");
 const persistent = @import("persistent_settings.zig");
+const gfn_defaults = @import("gfn_stream_preferences").Preferences{};
 const provider_picker = @import("provider_picker.zig");
 const provider_badge = @import("provider_badge.zig");
 const font = @import("pixel_font.zig");
@@ -784,4 +785,12 @@ pub export fn go_handheld_ui_stream_width(ui: ?*const Ui) c_uint {
 
 pub export fn go_handheld_ui_stream_height(ui: ?*const Ui) c_uint {
     return (ui orelse return 480).stream_height;
+}
+
+pub export fn go_handheld_ui_gfn_frames_per_second(ui: ?*const Ui) c_uint {
+    return (ui orelse return gfn_defaults.frames_per_second).settings.geforce_now.frames_per_second;
+}
+
+pub export fn go_handheld_ui_gfn_max_bitrate_kbps(ui: ?*const Ui) c_uint {
+    return (ui orelse return gfn_defaults.max_bitrate_kbps).settings.geforce_now.max_bitrate_kbps;
 }

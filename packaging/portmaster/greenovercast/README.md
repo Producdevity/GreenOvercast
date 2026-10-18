@@ -31,7 +31,8 @@ The release requires glibc 2.38 or newer. ArkOS is not supported.
 | Select + Start     | Exit after holding for one second | Exit after holding for one second |
 
 Settings include Xbox/Nintendo face-button layouts, game artwork, and Sign
-out. Games that return a 16:9 stream remain letterboxed on 4:3 displays.
+out. GeForce NOW also has target framerate and maximum bitrate settings.
+Games that return a 16:9 stream remain letterboxed on 4:3 displays.
 
 GeForce NOW uses the same gamepad controls. For store dialogs and game
 launchers, press Select + Y to toggle mouse mode: D-pad or left stick moves the

@@ -60,7 +60,10 @@ const release_zig_roots = [_]struct {
     .{
         .name = "greenovercast-ui",
         .path = "src/ui/handheld_ui.zig",
-        .imports = &.{.{ .name = "catalog_search", .path = "src/catalog/catalog_search.zig" }},
+        .imports = &.{
+            .{ .name = "catalog_search", .path = "src/catalog/catalog_search.zig" },
+            .{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" },
+        },
     },
     .{ .name = "greenovercast-sdl-platform", .path = "src/platform/sdl_platform.zig" },
     .{
@@ -605,9 +608,22 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/input/guide_chord.zig" },
         .{ .source = "src/session/message_protocol.zig" },
         .{ .source = "src/ui/keyboard.zig" },
-        .{ .source = "src/ui/control_icons.zig" },
+        .{
+            .source = "src/ui/control_icons.zig",
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
         .{ .source = "src/ui/navigation_repeat.zig" },
-        .{ .source = "src/ui/persistent_settings.zig" },
+        .{
+            .source = "src/ui/persistent_settings.zig",
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
+        .{
+            .source = "src/ui/settings_view.zig",
+            .project_includes = true,
+            .sdl = true,
+            .imports = &.{.{ .name = "gfn_stream_preferences", .path = "src/provider/geforce_now/stream_preferences.zig" }},
+        },
+        .{ .source = "src/provider/geforce_now/stream_preferences.zig" },
         .{ .source = "src/ui/stream_dimensions.zig" },
         .{ .source = "src/media/rtp/h264_depacketizer.zig" },
         .{ .source = "src/net/json_reader.zig" },
@@ -670,6 +686,7 @@ pub fn build(b: *std.Build) void {
             .source = "src/provider/geforce_now/webrtc_session.zig",
             .project_includes = true,
             .sdl = true,
+            .imports = &.{.{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" }},
         },
     };
     for (tests) |test_config|

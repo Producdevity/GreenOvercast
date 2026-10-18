@@ -1,4 +1,5 @@
 const std = @import("std");
+const gfn_stream_preferences = @import("gfn_stream_preferences");
 
 pub const max_games = 1024;
 pub const product_id_capacity = 64;
@@ -18,6 +19,7 @@ pub const Store = struct {
     path_length: usize = 0,
     face_buttons: FaceButtonMode = .system,
     artwork_enabled: bool = true,
+    geforce_now: gfn_stream_preferences.Preferences = .{},
     games: [max_games]GameSettings = [_]GameSettings{.{}} ** max_games,
     game_count: usize = 0,
 
@@ -66,20 +68,25 @@ pub const Store = struct {
         var file = try cwd.createFile(temporary_path, .{ .truncate = true, .mode = 0o600 });
         var closed = false;
         defer if (!closed) file.close();
-        var writer = file.writer();
+        try self.write(file.writer());
+        try file.sync();
+        file.close();
+        closed = true;
+        try cwd.rename(temporary_path, path);
+    }
+
+    fn write(self: *const Store, writer: anytype) !void {
         try writer.writeAll("version\t1\n");
         try writer.print("face_buttons\t{s}\n", .{@tagName(self.face_buttons)});
         try writer.print("artwork\t{d}\n", .{@intFromBool(self.artwork_enabled)});
+        try writer.print("geforce_now.frames_per_second\t{d}\n", .{self.geforce_now.frames_per_second});
+        try writer.print("geforce_now.max_bitrate_kbps\t{d}\n", .{self.geforce_now.max_bitrate_kbps});
         for (self.games[0..self.game_count]) |*entry| {
             try writer.print("game\t{s}\t{d}\n", .{
                 productId(entry),
                 @intFromBool(entry.favorite),
             });
         }
-        try file.sync();
-        file.close();
-        closed = true;
-        try cwd.rename(temporary_path, path);
     }
 
     fn load(self: *Store) !void {
@@ -118,6 +125,16 @@ pub const Store = struct {
             } else if (std.mem.eql(u8, kind, "artwork")) {
                 const value = fields.next() orelse continue;
                 self.artwork_enabled = std.mem.eql(u8, value, "1");
+            } else if (std.mem.eql(u8, kind, "geforce_now.frames_per_second")) {
+                const value = fields.next() orelse continue;
+                const parsed = std.fmt.parseUnsigned(u16, value, 10) catch continue;
+                if (gfn_stream_preferences.validFramesPerSecond(parsed))
+                    self.geforce_now.frames_per_second = parsed;
+            } else if (std.mem.eql(u8, kind, "geforce_now.max_bitrate_kbps")) {
+                const value = fields.next() orelse continue;
+                const parsed = std.fmt.parseUnsigned(u32, value, 10) catch continue;
+                if (gfn_stream_preferences.validBitrate(parsed))
+                    self.geforce_now.max_bitrate_kbps = parsed;
             } else if (std.mem.eql(u8, kind, "game")) {
                 const id = fields.next() orelse continue;
                 const favorite = fields.next() orelse continue;
@@ -145,18 +162,19 @@ test "settings round trip through the file format" {
     var store = Store{};
     store.face_buttons = .swapped;
     store.artwork_enabled = false;
+    store.geforce_now = .{ .frames_per_second = 60, .max_bitrate_kbps = 12000 };
     const game_settings = store.game("PRODUCT-1").?;
     game_settings.favorite = true;
 
     var data = std.ArrayList(u8).init(std.testing.allocator);
     defer data.deinit();
-    try data.writer().writeAll("version\t1\nface_buttons\tswapped\nartwork\t0\n");
-    try data.writer().writeAll("game\tPRODUCT-1\t1\n");
+    try store.write(data.writer());
 
     var parsed = Store{};
     try parsed.parse(data.items);
     try std.testing.expectEqual(FaceButtonMode.swapped, parsed.face_buttons);
     try std.testing.expect(!parsed.artwork_enabled);
+    try std.testing.expectEqualDeep(store.geforce_now, parsed.geforce_now);
     const parsed_game = parsed.findGame("PRODUCT-1").?;
     try std.testing.expect(parsed_game.favorite);
 }
@@ -168,4 +186,43 @@ test "settings reject unknown versions and unsafe ids" {
     try std.testing.expectError(error.UnsupportedSettings, store.parse("version\t1\nversion\t1\n"));
     try std.testing.expectError(error.UnsupportedSettings, store.parse("artwork\t0\nversion\t1\n"));
     try std.testing.expect(store.game("bad\tid") == null);
+}
+
+test "settings keep GFN stream quality within the supported choices" {
+    var store = Store{};
+    try store.parse("version\t1\ngeforce_now.frames_per_second\t60\ngeforce_now.max_bitrate_kbps\t12000\n");
+    try std.testing.expectEqual(@as(u16, 60), store.geforce_now.frames_per_second);
+    try std.testing.expectEqual(@as(u32, 12000), store.geforce_now.max_bitrate_kbps);
+
+    var invalid = Store{};
+    try invalid.parse("version\t1\ngeforce_now.frames_per_second\t1\ngeforce_now.max_bitrate_kbps\t0\n");
+    try std.testing.expectEqualDeep(gfn_stream_preferences.Preferences{}, invalid.geforce_now);
+
+    try invalid.parse("version\t1\ngeforce_now.max_bitrate_kbps\t4294967295\n");
+    try std.testing.expectEqualDeep(gfn_stream_preferences.Preferences{}, invalid.geforce_now);
+}
+
+test "only GFN-qualified keys change GFN quality" {
+    var store = Store{};
+    try store.parse("version\t1\nxbox.frames_per_second\t60\nxbox.max_bitrate_kbps\t16000\nframes_per_second\t60\nmax_bitrate_kbps\t16000\n");
+    try std.testing.expectEqualDeep(gfn_stream_preferences.Preferences{}, store.geforce_now);
+}
+
+test "provider preferences survive saving and reopening the settings file" {
+    var directory = std.testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root);
+    const path = try std.fs.path.join(std.testing.allocator, &.{ root, "settings.tsv" });
+    defer std.testing.allocator.free(path);
+    var store = try Store.init(path);
+    store.geforce_now = .{ .frames_per_second = 60, .max_bitrate_kbps = 16000 };
+    store.face_buttons = .swapped;
+    store.artwork_enabled = false;
+    try store.save();
+
+    const reloaded = try Store.init(path);
+    try std.testing.expectEqualDeep(store.geforce_now, reloaded.geforce_now);
+    try std.testing.expectEqual(store.face_buttons, reloaded.face_buttons);
+    try std.testing.expectEqual(store.artwork_enabled, reloaded.artwork_enabled);
 }
