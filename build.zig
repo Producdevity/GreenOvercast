@@ -602,6 +602,7 @@ pub fn build(b: *std.Build) void {
         imports: []const ZigImport = &.{},
     }{
         .{ .source = "src/app/state.zig" },
+        .{ .source = "src/platform/linux/wifi_power_save.zig" },
         .{ .source = "src/catalog/catalog_parser.zig" },
         .{ .source = "src/catalog/catalog_search.zig" },
         .{ .source = "src/input/wire_encoder.zig" },
