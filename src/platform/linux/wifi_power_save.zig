@@ -13,6 +13,7 @@ const max_interfaces = 8;
 const Interface = struct {
     name: [16:0]u8 = [_:0]u8{0} ** 16,
     index: u32,
+    wireless_id: u64 = 0,
 
     fn slice(self: *const Interface) []const u8 {
         return std.mem.sliceTo(&self.name, 0);
@@ -26,6 +27,11 @@ pub const Guard = struct {
 
     pub fn begin(self: *Guard) void {
         if (builtin.os.tag != .linux or self.connection != null) return;
+        if (self.count != 0) {
+            self.connection = Netlink.open() catch return;
+            self.restore(&self.connection.?);
+            if (self.count != 0) return;
+        }
         var interfaces = std.fs.openDirAbsolute("/sys/class/net", .{ .iterate = true }) catch return;
         defer interfaces.close();
         var iterator = interfaces.iterate();
@@ -56,25 +62,52 @@ pub const Guard = struct {
 
     fn disable(self: *Guard, backend: anytype, interface: Interface) !void {
         if (self.count == max_interfaces) return error.TooManyInterfaces;
+        var owned = interface;
+        owned.wireless_id = try backend.identity(interface.index);
         if (!(try backend.get(interface.index))) return;
-        errdefer backend.set(interface.index, true) catch {};
-        try backend.set(interface.index, false);
-        self.changed[self.count] = interface;
+        if (try backend.identity(interface.index) != owned.wireless_id) return error.InterfaceUnavailable;
+        self.changed[self.count] = owned;
         self.count += 1;
+        backend.set(interface.index, false) catch |err| {
+            switch (err) {
+                error.AccessDenied, error.NotSupported, error.InterfaceUnavailable, error.KernelRejected => self.count -= 1,
+                else => {
+                    _ = restoreInterface(backend, owned) catch |rollback_error| {
+                        std.debug.print("Wi-Fi power-save rollback failed on {s}: {s}\n", .{ interface.slice(), @errorName(rollback_error) });
+                        return err;
+                    };
+                    self.count -= 1;
+                },
+            }
+            return err;
+        };
         std.debug.print("Wi-Fi power save disabled on {s}\n", .{interface.slice()});
     }
 
     fn restore(self: *Guard, backend: anytype) void {
+        var pending: usize = 0;
         for (self.changed[0..self.count]) |interface| {
-            // Interface indexes can be reused after a USB radio disconnects.
-            if (backend.index(interface.slice()) != interface.index) continue;
-            backend.set(interface.index, true) catch |err| {
+            const restored = restoreInterface(backend, interface) catch |err| {
                 std.debug.print("Wi-Fi power-save restore failed on {s}: {s}\n", .{ interface.slice(), @errorName(err) });
+                self.changed[pending] = interface;
+                pending += 1;
                 continue;
             };
-            std.debug.print("Wi-Fi power save restored on {s}\n", .{interface.slice()});
+            if (restored) std.debug.print("Wi-Fi power save restored on {s}\n", .{interface.slice()});
         }
-        self.count = 0;
+        self.count = pending;
+    }
+
+    fn restoreInterface(backend: anytype, interface: Interface) !bool {
+        if (backend.index(interface.slice()) != interface.index) return false;
+        const identity = backend.identity(interface.index) catch |err| {
+            if (err == error.InterfaceUnavailable) return false;
+            return err;
+        };
+        // WDEV distinguishes a replacement radio reusing the name and index.
+        if (identity != interface.wireless_id) return false;
+        try backend.set(interface.index, true);
+        return true;
     }
 
     pub fn end(self: *Guard) void {
@@ -126,6 +159,14 @@ const Netlink = struct {
             c.NL80211_PS_ENABLED => true,
             else => error.InvalidReply,
         };
+    }
+
+    fn identity(self: *Netlink, interface: u32) !u64 {
+        var message = Message.init(self.family, c.NL80211_CMD_GET_INTERFACE, false);
+        try message.integer(c.NL80211_ATTR_IFINDEX, interface);
+        const value = try self.request(&message, c.NL80211_ATTR_WDEV);
+        if (value.len != 8) return error.InvalidReply;
+        return std.mem.readInt(u64, value[0..8], endian);
     }
 
     fn set(self: *Netlink, interface: u32, enabled: bool) !void {
@@ -261,8 +302,12 @@ const Fake = struct {
     writes: usize = 0,
     get_error: ?anyerror = null,
     set_error: ?anyerror = null,
+    identity_error: ?anyerror = null,
     lose_ack: bool = false,
+    rollback_error: bool = false,
     current_index: u32 = 3,
+    current_wireless_id: u64 = 11,
+    replace_on_disable: bool = false,
 
     fn get(self: *Fake, _: u32) !bool {
         if (self.get_error) |err| return err;
@@ -271,13 +316,20 @@ const Fake = struct {
 
     fn set(self: *Fake, _: u32, enabled: bool) !void {
         if (self.set_error) |err| return err;
+        if (enabled and self.rollback_error) return error.SocketError;
         self.enabled = enabled;
         self.writes += 1;
+        if (self.replace_on_disable and !enabled) self.current_wireless_id += 1;
         if (self.lose_ack and !enabled) return error.TimedOut;
     }
 
     fn index(self: *Fake, _: []const u8) u32 {
         return self.current_index;
+    }
+
+    fn identity(self: *Fake, _: u32) !u64 {
+        if (self.identity_error) |err| return err;
+        return self.current_wireless_id;
     }
 };
 
@@ -334,6 +386,19 @@ test "a lost set acknowledgement rolls back a possibly applied change" {
     try std.testing.expectEqual(@as(usize, 0), guard.count);
 }
 
+test "a failed rollback keeps ownership until cleanup can retry" {
+    var backend: Fake = .{ .lose_ack = true };
+    var guard: Guard = .{};
+    backend.rollback_error = true;
+    try std.testing.expectError(error.TimedOut, guard.disable(&backend, testInterface()));
+    try std.testing.expect(!backend.enabled);
+    try std.testing.expectEqual(@as(usize, 1), guard.count);
+    backend.rollback_error = false;
+    guard.restore(&backend);
+    try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
 test "removed or replaced interfaces are not modified on restoration" {
     for ([_]u32{ 0, 4 }) |index| {
         var backend: Fake = .{};
@@ -346,14 +411,53 @@ test "removed or replaced interfaces are not modified on restoration" {
     }
 }
 
-test "restoration failure is bounded and clears ownership" {
+test "a replacement radio reusing the name and index is not restored" {
+    var backend: Fake = .{};
+    var guard: Guard = .{};
+    try guard.disable(&backend, testInterface());
+    backend.current_wireless_id += 1;
+    guard.restore(&backend);
+    try std.testing.expectEqual(@as(usize, 1), backend.writes);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
+test "rollback does not modify a replacement radio after a lost acknowledgement" {
+    var backend: Fake = .{ .lose_ack = true, .replace_on_disable = true };
+    var guard: Guard = .{};
+    try std.testing.expectError(error.TimedOut, guard.disable(&backend, testInterface()));
+    try std.testing.expectEqual(@as(usize, 1), backend.writes);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
+test "unavailable identity prevents mutation and temporary lookup failure retains restoration" {
+    var backend: Fake = .{ .identity_error = error.NotSupported };
+    var guard: Guard = .{};
+    try std.testing.expectError(error.NotSupported, guard.disable(&backend, testInterface()));
+    try std.testing.expectEqual(@as(usize, 0), backend.writes);
+    backend.identity_error = null;
+    try guard.disable(&backend, testInterface());
+    backend.identity_error = error.TimedOut;
+    guard.restore(&backend);
+    try std.testing.expectEqual(@as(usize, 1), guard.count);
+    try std.testing.expectEqual(@as(usize, 1), backend.writes);
+    backend.identity_error = null;
+    guard.restore(&backend);
+    try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
+test "restoration failure is bounded and retains ownership for a later attempt" {
     var backend: Fake = .{};
     var guard: Guard = .{};
     try guard.disable(&backend, testInterface());
     backend.set_error = error.InterfaceUnavailable;
     guard.restore(&backend);
-    try std.testing.expectEqual(@as(usize, 0), guard.count);
+    try std.testing.expectEqual(@as(usize, 1), guard.count);
     try std.testing.expectEqual(@as(usize, 1), backend.writes);
+    backend.set_error = null;
+    guard.restore(&backend);
+    try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
 }
 
 test "interface capacity is checked before changing power save" {

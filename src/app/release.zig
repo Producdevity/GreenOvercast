@@ -152,6 +152,7 @@ pub const Release = struct {
         };
         std.posix.sigaction(std.posix.SIG.INT, &action, null);
         std.posix.sigaction(std.posix.SIG.TERM, &action, null);
+        std.posix.sigaction(std.posix.SIG.HUP, &action, null);
 
         debug("GreenOvercast streaming client\n", .{});
         debug("Initializing display\n", .{});
@@ -492,8 +493,8 @@ pub const Release = struct {
 
     pub fn createSession(self: *Release) Result {
         if (self.title_id[0] == 0) return .failed;
-        self.wifi.begin();
         self.drawLoading("STARTING GAME", "ALLOCATING CLOUD SESSION", c.GO_HANDHELD_UI_ACTION_CANCEL);
+        self.wifi.begin();
         debug("Creating session ({s})\n", .{std.mem.sliceTo(&self.title_id, 0)});
         if (self.provider == .geforce_now) {
             const requested_width: u16 = @intCast(@min(
