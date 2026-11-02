@@ -393,6 +393,13 @@ pub const Session = struct {
             }
             if (c.go_handheld_ui_wait(self.ui, 16) != 0) return error.Cancelled;
         }
+        const signaling = self.signaling.?;
+        std.debug.print("GeForce NOW offer timeout: messages={d}, peer_assigned={}, assignment_acked={}, heartbeat={}\n", .{
+            signaling.received_messages,
+            signaling.peer_assigned,
+            signaling.assignment_acknowledged,
+            signaling.heartbeat_seen,
+        });
         return error.OfferTimeout;
     }
 

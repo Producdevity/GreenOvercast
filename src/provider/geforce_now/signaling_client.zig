@@ -20,6 +20,10 @@ pub const Client = struct {
     acknowledgement_counter: u32 = 0,
     last_heartbeat_ms: i64,
     receiving_fragmented_text: bool = false,
+    received_messages: u32 = 0,
+    peer_assigned: bool = false,
+    assignment_acknowledged: bool = false,
+    heartbeat_seen: bool = false,
 
     pub fn connect(
         allocator: std.mem.Allocator,
@@ -85,7 +89,8 @@ pub const Client = struct {
 
         var chunk: [4096]u8 = undefined;
         var frame: c.GoWebSocketFrame = undefined;
-        while (true) {
+        var frames: usize = 0;
+        while (frames < 64) : (frames += 1) {
             const result = c.go_websocket_receive(self.socket, &chunk, chunk.len, &frame);
             if (result == 0) return null;
             if (result == -2) return error.SignalingClosed;
@@ -113,24 +118,33 @@ pub const Client = struct {
 
             var message = try protocol.decode(self.allocator, self.receive_buffer.items);
             errdefer message.deinit();
+            self.received_messages +|= 1;
+            var assignment_received = false;
             if (message.peer_info) |peer| {
                 if (peer.name) |name| {
-                    if (std.mem.eql(u8, name, self.peer_name)) self.local_peer_id = peer.id;
+                    if (std.mem.eql(u8, name, self.peer_name)) {
+                        self.local_peer_id = peer.id;
+                        self.peer_assigned = true;
+                        self.assignment_acknowledged = false;
+                        assignment_received = true;
+                    }
                 }
             }
-            if (message.peer_from) |from| self.remote_peer_id = from;
-            if (message.acknowledgement_id) |id| {
-                const own_echo = if (message.peer_info) |peer|
-                    peer.id == self.local_peer_id
-                else
-                    false;
-                if (!own_echo) {
-                    const acknowledgement = try protocol.encodeAcknowledgement(self.allocator, id);
-                    defer self.allocator.free(acknowledgement);
-                    try self.sendText(acknowledgement);
+            if (message.peer_from) |from| {
+                if (self.peer_assigned and from == self.local_peer_id) {
+                    message.deinit();
+                    continue;
                 }
+                self.remote_peer_id = from;
+            }
+            if (message.acknowledgement_id) |id| {
+                const acknowledgement = try protocol.encodeAcknowledgement(self.allocator, id);
+                defer self.allocator.free(acknowledgement);
+                try self.sendText(acknowledgement);
+                if (assignment_received) self.assignment_acknowledged = true;
             }
             if (message.heartbeat) {
+                self.heartbeat_seen = true;
                 const heartbeat = try protocol.encodeHeartbeat(self.allocator);
                 defer self.allocator.free(heartbeat);
                 try self.sendText(heartbeat);
@@ -138,6 +152,7 @@ pub const Client = struct {
             }
             return message;
         }
+        return null;
     }
 
     pub fn sendAnswer(self: *Client, sdp: []const u8, nvst_sdp: []const u8) !void {
@@ -216,3 +231,152 @@ pub const Client = struct {
         return self.acknowledgement_counter;
     }
 };
+
+const assignment = "{\"ackid\":7,\"peer_info\":{\"id\":3,\"name\":\"peer-test\"}}";
+const remote_offer = "{\"ackid\":8,\"peer_msg\":{\"from\":1,\"to\":3,\"msg\":\"{\\\"type\\\":\\\"offer\\\",\\\"sdp\\\":\\\"v=0\\\"}\"}}";
+
+fn testClient() !*Client {
+    return Client.connect(std.testing.allocator, "wss://example.invalid/nvst/", "test-session", "peer-test", 640, 480);
+}
+
+test "peer assignment is acknowledged before the server offers a stream" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{.{ .text = assignment }};
+    socket.gated_offer = remote_offer;
+    const client = try testClient();
+    defer client.destroy();
+    var assigned = (try client.poll()).?;
+    defer assigned.deinit();
+    try std.testing.expectEqual(@as(u32, 3), client.local_peer_id);
+    try std.testing.expect(socket.assignment_acknowledged);
+    var offer = (try client.poll()) orelse return error.OfferNotReceived;
+    defer offer.deinit();
+    try std.testing.expectEqualStrings("v=0", offer.payload.offer);
+    try std.testing.expectEqualStrings("{\"ack\":8}", socket.message(2));
+}
+
+test "repeated assignments and remote peer announcements are acknowledged" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{ .{ .text = assignment }, .{ .text = assignment }, .{ .text = "{\"ackid\":9,\"peer_info\":{\"id\":1,\"name\":\"server\"}}" } };
+    const client = try testClient();
+    defer client.destroy();
+    for (0..3) |_| {
+        var message = (try client.poll()).?;
+        message.deinit();
+    }
+    try std.testing.expectEqual(@as(usize, 4), socket.sent_count);
+    try std.testing.expectEqualStrings("{\"ack\":7}", socket.message(1));
+    try std.testing.expectEqualStrings("{\"ack\":7}", socket.message(2));
+    try std.testing.expectEqualStrings("{\"ack\":9}", socket.message(3));
+    try std.testing.expectEqual(@as(u32, 3), client.local_peer_id);
+}
+
+test "echoed local peer messages neither change the remote peer nor generate ACKs" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{ .{ .text = assignment }, .{ .text = "{\"ackid\":10,\"peer_msg\":{\"from\":3,\"to\":1,\"msg\":\"{\\\"type\\\":\\\"answer\\\"}\"}}" } };
+    const client = try testClient();
+    defer client.destroy();
+    var assigned = (try client.poll()).?;
+    defer assigned.deinit();
+    try std.testing.expect((try client.poll()) == null);
+    try std.testing.expectEqual(@as(u32, 1), client.remote_peer_id);
+    try std.testing.expectEqual(@as(usize, 2), socket.sent_count);
+    try client.sendAnswer("answer", "nvst");
+    try std.testing.expect(std.mem.indexOf(u8, socket.message(2), "\"to\":1") != null);
+}
+
+test "assignment and offer assembly survives partial frames and fragmented messages" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    const split = assignment.len / 2;
+    const offer_split = remote_offer.len / 2;
+    socket.incoming = &.{
+        .{ .text = assignment[0..split], .bytes_left = assignment.len - split },
+        .{ .text = assignment[split..], .offset = split },
+        .{ .text = remote_offer[0..offer_split], .flags = 1 | 4 },
+        .{ .text = remote_offer[offer_split..] },
+    };
+    const client = try testClient();
+    defer client.destroy();
+    var assigned = (try client.poll()).?;
+    defer assigned.deinit();
+    try std.testing.expect(socket.assignment_acknowledged);
+    var offer = (try client.poll()).?;
+    defer offer.deinit();
+    try std.testing.expectEqualStrings("v=0", offer.payload.offer);
+    try std.testing.expectEqual(@as(usize, 3), socket.sent_count);
+}
+
+test "server rejection and transport closure do not become offer timeouts" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{.{ .text = "{\"error\":\"requestRejected\"}" }};
+    const client = try testClient();
+    defer client.destroy();
+    try std.testing.expectError(error.SignalingRejected, client.poll());
+    socket.closed = true;
+    try std.testing.expectError(error.SignalingClosed, client.poll());
+}
+
+test "failed assignment acknowledgements release the decoded message" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{.{ .text = assignment }};
+    const client = try testClient();
+    defer client.destroy();
+    socket.fail_send = true;
+    try std.testing.expectError(error.SignalingSendFailed, client.poll());
+}
+
+test "echo floods leave time for cancellation and keep the peer identity" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    var frames: [80]socket.Incoming = undefined;
+    @memset(&frames, .{ .text = "{\"peer_msg\":{\"from\":3,\"msg\":\"{\\\"type\\\":\\\"answer\\\"}\"}}" });
+    frames[0] = .{ .text = assignment };
+    frames[79] = .{ .text = remote_offer };
+    socket.incoming = &frames;
+    const client = try testClient();
+    defer client.destroy();
+    var assigned = (try client.poll()).?;
+    defer assigned.deinit();
+    try std.testing.expect((try client.poll()) == null);
+    try std.testing.expectEqual(@as(u32, 65), client.received_messages);
+    var offer = (try client.poll()).?;
+    defer offer.deinit();
+    try std.testing.expect(offer.payload == .offer);
+    try std.testing.expectEqual(@as(u32, 1), client.remote_peer_id);
+}
+
+test "peer removal is acknowledged and reported as a remote close" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{.{ .text = "{\"error\":\"peerRemoved\",\"ackid\":7}" }};
+    const client = try testClient();
+    defer client.destroy();
+    var message = (try client.poll()).?;
+    defer message.deinit();
+    try std.testing.expect(message.peer_removed);
+    try std.testing.expectEqualStrings("{\"ack\":7}", socket.message(1));
+}
+
+test "signaling setup and ACK exchange release partial allocations" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            const socket = @import("gfn_websocket_fake");
+            socket.reset();
+            socket.incoming = &.{.{ .text = assignment }};
+            socket.gated_offer = remote_offer;
+            const client = try Client.connect(allocator, "wss://example.invalid/nvst/", "test-session", "peer-test", 640, 480);
+            defer client.destroy();
+            var assigned = (try client.poll()).?;
+            defer assigned.deinit();
+            var offer = (try client.poll()).?;
+            defer offer.deinit();
+            try std.testing.expect(offer.payload == .offer);
+        }
+    }.run, .{});
+}

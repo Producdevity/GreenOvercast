@@ -643,6 +643,11 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/provider/geforce_now/subscription_protocol.zig" },
         .{ .source = "src/provider/geforce_now/provider_protocol.zig" },
         .{ .source = "src/provider/geforce_now/signaling_protocol.zig" },
+        .{
+            .source = "src/provider/geforce_now/signaling_client.zig",
+            .project_includes = true,
+            .imports = &.{.{ .name = "gfn_websocket_fake", .path = "tests/gfn_websocket_fake.zig" }},
+        },
         .{ .source = "src/provider/geforce_now/sdp_protocol.zig" },
         .{
             .source = "src/provider/geforce_now/auth_protocol.zig",
@@ -687,7 +692,10 @@ pub fn build(b: *std.Build) void {
             .source = "src/provider/geforce_now/webrtc_session.zig",
             .project_includes = true,
             .sdl = true,
-            .imports = &.{.{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" }},
+            .imports = &.{
+                .{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" },
+                .{ .name = "gfn_websocket_fake", .path = "tests/gfn_websocket_fake.zig" },
+            },
         },
     };
     for (tests) |test_config|
