@@ -79,7 +79,7 @@ the tested dArkOS fork uses glibc 2.41.
 
 ## Build
 
-You need a Linux or macOS host with CMake 3.24+, `curl`, `git`, `make`, `patch`,
+You need a Linux or macOS host with CMake 3.24+, curl 7.71+, `git`, `make`, `patch`,
 `perl`, `pkg-config`, `python3`, and `tar`.
 
 Build validation also needs `llvm-readelf` or GNU `readelf` (`binutils` on

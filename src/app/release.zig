@@ -5,6 +5,7 @@ const geforce_catalog = @import("../provider/geforce_now/catalog_service.zig");
 const geforce_session = @import("../provider/geforce_now/session_client.zig");
 const geforce_webrtc = @import("../provider/geforce_now/webrtc_session.zig");
 const geforce_ads = @import("../provider/geforce_now/ad_playback.zig");
+const wifi_power_save = @import("../platform/linux/wifi_power_save.zig");
 
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
@@ -86,6 +87,7 @@ pub const Release = struct {
     geforce_catalog: ?*geforce_catalog.Service = null,
     provider: ?Provider = null,
     curl_initialized: bool = false,
+    wifi: wifi_power_save.Guard = .{},
     requested_title: [128]u8 = [_]u8{0} ** 128,
     title_id: [128]u8 = [_]u8{0} ** 128,
     title_name: [192]u8 = [_]u8{0} ** 192,
@@ -150,6 +152,7 @@ pub const Release = struct {
         };
         std.posix.sigaction(std.posix.SIG.INT, &action, null);
         std.posix.sigaction(std.posix.SIG.TERM, &action, null);
+        std.posix.sigaction(std.posix.SIG.HUP, &action, null);
 
         debug("GreenOvercast streaming client\n", .{});
         debug("Initializing display\n", .{});
@@ -491,6 +494,7 @@ pub const Release = struct {
     pub fn createSession(self: *Release) Result {
         if (self.title_id[0] == 0) return .failed;
         self.drawLoading("STARTING GAME", "ALLOCATING CLOUD SESSION", c.GO_HANDHELD_UI_ACTION_CANCEL);
+        self.wifi.begin();
         debug("Creating session ({s})\n", .{std.mem.sliceTo(&self.title_id, 0)});
         if (self.provider == .geforce_now) {
             const requested_width: u16 = @intCast(@min(
@@ -840,6 +844,7 @@ pub const Release = struct {
             self.geforce_cloud.?.stop() catch |err|
                 std.debug.print("GeForce NOW session cleanup failed: {s}\n", .{@errorName(err)});
         }
+        self.wifi.end();
     }
 
     pub fn resetSession(self: *Release) Result {
