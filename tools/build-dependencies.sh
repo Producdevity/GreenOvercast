@@ -148,7 +148,7 @@ fetch_file() (
     trap 'rm -f "$download"' EXIT
     trap 'exit 1' HUP INT TERM
     echo "fetching $file_url"
-    curl -fLSs --connect-timeout 20 --max-time 180 \
+    curl -fLSs --connect-timeout 20 --speed-time 60 --speed-limit 1024 \
       --retry 3 --retry-all-errors --retry-max-time 240 \
       "$file_url" -o "$download" || exit "$?"
   fi
