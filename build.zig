@@ -588,6 +588,12 @@ pub fn build(b: *std.Build) void {
     });
     dependency_toolchain_test.setCwd(b.path("."));
     test_step.dependOn(&dependency_toolchain_test.step);
+    const dependency_download_test = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tests/dependency_download_test.py"),
+    });
+    dependency_download_test.setCwd(b.path("."));
+    test_step.dependOn(&dependency_download_test.step);
     const aarch64_runtime_test = b.addSystemCommand(&.{
         "sh",
         b.pathFromRoot("tests/aarch64_runtime_test.sh"),

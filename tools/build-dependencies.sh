@@ -136,6 +136,32 @@ hash_file() {
   fi
 }
 
+fetch_file() (
+  file_name=$1
+  file_url=$2
+  expected_hash=$3
+  destination="$DOWNLOADS/$file_name"
+  download="$destination"
+
+  if [ ! -f "$destination" ]; then
+    download=$(mktemp "$DOWNLOADS/.${file_name}.XXXXXX")
+    trap 'rm -f "$download"' EXIT
+    trap 'exit 1' HUP INT TERM
+    echo "fetching $file_url"
+    curl -fLSs --connect-timeout 20 --max-time 180 \
+      --retry 3 --retry-all-errors --retry-max-time 240 \
+      "$file_url" -o "$download" || exit "$?"
+  fi
+  actual_hash=$(hash_file "$download")
+  [ "$actual_hash" = "$expected_hash" ] || {
+    echo "sha256 mismatch for $file_name" >&2
+    exit 1
+  }
+  if [ "$download" != "$destination" ]; then
+    mv "$download" "$destination"
+  fi
+)
+
 fetch_source() {
   archive_name=$1
   source_name=$2
@@ -144,37 +170,12 @@ fetch_source() {
   archive="$DOWNLOADS/$archive_name"
   source_dir="$SOURCES/$source_name"
 
-  if [ ! -f "$archive" ]; then
-    echo "fetching $source_url"
-    curl -fL --retry 3 "$source_url" -o "$archive"
-  fi
-  actual_hash=$(hash_file "$archive")
-  [ "$actual_hash" = "$expected_hash" ] || {
-    echo "sha256 mismatch for $archive_name" >&2
-    exit 1
-  }
+  fetch_file "$archive_name" "$source_url" "$expected_hash"
   if [ ! -d "$source_dir" ]; then
     tar -xf "$archive" -C "$SOURCES"
   fi
   [ -d "$source_dir" ] || {
     echo "archive did not contain $source_name" >&2
-    exit 1
-  }
-}
-
-fetch_file() {
-  file_name=$1
-  file_url=$2
-  expected_hash=$3
-  destination="$DOWNLOADS/$file_name"
-
-  if [ ! -f "$destination" ]; then
-    echo "fetching $file_url"
-    curl -fL --retry 3 "$file_url" -o "$destination"
-  fi
-  actual_hash=$(hash_file "$destination")
-  [ "$actual_hash" = "$expected_hash" ] || {
-    echo "sha256 mismatch for $file_name" >&2
     exit 1
   }
 }
