@@ -81,7 +81,7 @@ export fn go_websocket_receive(_: *anyopaque, output: [*]u8, capacity: usize, fr
         if (incoming_index < incoming.len) incoming_index += 1 else gated_offer = null;
         incoming_offset = 0;
     }
-    return 1;
+    return if (frame.flags & (1 << 3) != 0) -2 else 1;
 }
 
 export fn go_websocket_last_error(_: *const anyopaque) [*:0]const u8 {

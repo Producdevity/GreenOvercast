@@ -321,6 +321,15 @@ test "server rejection and transport closure do not become offer timeouts" {
     try std.testing.expectError(error.SignalingClosed, client.poll());
 }
 
+test "a queued WebSocket close frame is reported immediately" {
+    const socket = @import("gfn_websocket_fake");
+    socket.reset();
+    socket.incoming = &.{.{ .text = "", .flags = c.GO_WEBSOCKET_CLOSE }};
+    const client = try testClient();
+    defer client.destroy();
+    try std.testing.expectError(error.SignalingClosed, client.poll());
+}
+
 test "failed assignment acknowledgements release the decoded message" {
     const socket = @import("gfn_websocket_fake");
     socket.reset();
