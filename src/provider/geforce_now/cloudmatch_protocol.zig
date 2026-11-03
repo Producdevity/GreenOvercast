@@ -345,20 +345,23 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
             defer if (ip) |value| allocator.free(value);
             const port_value = optionalUnsigned(connection, "port");
             const port: ?u16 = if (port_value != null and port_value.? > 0 and port_value.? <= std.math.maxInt(u16)) @intCast(port_value.?) else null;
-            if (usage == 14 and port_value != null and port == null) continue;
             const path = duplicateOptionalString(allocator, connection, "resourcePath") catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => null,
             };
             defer if (path) |value| allocator.free(value);
             if (usage == 14 and (signaling_url == null or signaling_uses_rtsp)) {
-                if (ip == null and (path == null or std.mem.indexOf(u8, path.?, "://") == null)) continue;
+                const absolute = path != null and std.mem.indexOf(u8, path.?, "://") != null;
+                if (!absolute and (ip == null or (port_value != null and port == null))) continue;
                 const uses_rtsp = if (path) |resource|
                     std.mem.startsWith(u8, resource, "rtsp://") or std.mem.startsWith(u8, resource, "rtsps://")
                 else
                     false;
                 if (signaling_url != null and uses_rtsp) continue;
-                const url = try buildSignalingUrl(allocator, ip orelse "", port, path);
+                const url = buildSignalingUrl(allocator, ip orelse "", port, path) catch |err| switch (err) {
+                    error.InvalidSignalingEndpoint => continue,
+                    else => return err,
+                };
                 if (signaling_url) |old| allocator.free(old);
                 signaling_url = url;
                 signaling_from_connection = true;
@@ -889,6 +892,48 @@ test "relative signaling paths preserve the assigned port" {
     );
     defer session.deinit();
     try std.testing.expectEqualStrings("wss://203.0.113.10:8443/nvst/", session.signaling_url.?);
+}
+
+test "absolute signaling URLs ignore invalid side-band ports" {
+    for ([_]u32{ 0, 65536 }) |port| {
+        for ([_]struct { resource: []const u8, expected: []const u8 }{
+            .{ .resource = "wss://seat.example.invalid:9443/custom/", .expected = "wss://seat.example.invalid:9443/custom/" },
+            .{ .resource = "https://seat.example.invalid/nvst/", .expected = "wss://seat.example.invalid:443/nvst/" },
+            .{ .resource = "rtsps://seat.example.invalid:48322/session", .expected = "wss://seat.example.invalid:443/nvst/" },
+        }) |case| {
+            const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,\"connectionInfo\":[{{\"usage\":14,\"ip\":\"203.0.113.1\",\"port\":{d},\"resourcePath\":\"{s}\"}}]}}}}", .{ port, case.resource });
+            defer std.testing.allocator.free(bytes);
+            var session = try parseSession(std.testing.allocator, bytes);
+            defer session.deinit();
+            const url = session.signaling_url orelse return error.MissingSignalingEndpoint;
+            try std.testing.expectEqualStrings(case.expected, url);
+        }
+    }
+}
+
+test "malformed signaling candidates preserve later routes and cleanup ownership" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var session = try parseSession(allocator,
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"resourcePath":"ws://seat.example.invalid/nvst/"},{"usage":14,"resourcePath":"wss://user@seat.example.invalid/nvst/"},{"usage":14,"resourcePath":"wss://seat.example.invalid:0/nvst/"},{"usage":14,"ip":"203.0.113.10","port":8443,"resourcePath":"/nvst/"}]}}
+            );
+            defer session.deinit();
+            try std.testing.expectEqualStrings("one", session.id);
+            try std.testing.expectEqualStrings("wss://203.0.113.10:8443/nvst/", session.signaling_url.?);
+            try std.testing.expect(session.signaling_from_connection);
+        }
+    }.run, .{});
+
+    for ([_]bool{ false, true }) |control| {
+        const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,{s}\"connectionInfo\":[{{\"usage\":14,\"resourcePath\":\"invalid://seat.example.invalid/nvst/\"}}]}}}}", .{if (control) "\"sessionControlInfo\":{\"ip\":\"203.0.113.20\"}," else ""});
+        defer std.testing.allocator.free(bytes);
+        var session = try parseSession(std.testing.allocator, bytes);
+        defer session.deinit();
+        try std.testing.expectEqualStrings("one", session.id);
+        if (control) {
+            try std.testing.expectEqualStrings("wss://203.0.113.20:443/nvst/", session.signaling_url.?);
+        } else try std.testing.expect(session.signaling_url == null);
+    }
 }
 
 test "WebSocket endpoints preserve their authority and RTSP allocations use the WebRTC route" {
