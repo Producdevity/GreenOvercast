@@ -110,10 +110,23 @@ pub const Guard = struct {
         return true;
     }
 
+    fn restoreWithRetries(self: *Guard, backend: anytype) void {
+        for (0..3) |_| {
+            self.restore(backend);
+            if (self.count == 0) break;
+        }
+    }
+
     pub fn end(self: *Guard) void {
         if (builtin.os.tag != .linux) return;
+        if (self.connection == null and self.count != 0) {
+            self.connection = Netlink.open() catch |err| {
+                std.debug.print("Wi-Fi power-save restore unavailable: {s}\n", .{@errorName(err)});
+                return;
+            };
+        }
         if (self.connection) |*connection| {
-            self.restore(connection);
+            self.restoreWithRetries(connection);
             std.posix.close(connection.fd);
             self.connection = null;
         }
@@ -308,6 +321,8 @@ const Fake = struct {
     current_index: u32 = 3,
     current_wireless_id: u64 = 11,
     replace_on_disable: bool = false,
+    restore_failures_remaining: usize = 0,
+    restore_attempts: usize = 0,
 
     fn get(self: *Fake, _: u32) !bool {
         if (self.get_error) |err| return err;
@@ -316,6 +331,13 @@ const Fake = struct {
 
     fn set(self: *Fake, _: u32, enabled: bool) !void {
         if (self.set_error) |err| return err;
+        if (enabled) {
+            self.restore_attempts += 1;
+            if (self.restore_failures_remaining != 0) {
+                self.restore_failures_remaining -= 1;
+                return error.SocketError;
+            }
+        }
         if (enabled and self.rollback_error) return error.SocketError;
         self.enabled = enabled;
         self.writes += 1;
@@ -457,6 +479,31 @@ test "restoration failure is bounded and retains ownership for a later attempt" 
     backend.set_error = null;
     guard.restore(&backend);
     try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
+test "cleanup retries transient restoration failures before returning" {
+    var backend: Fake = .{ .restore_failures_remaining = 2 };
+    var guard: Guard = .{};
+    try guard.disable(&backend, testInterface());
+    guard.restoreWithRetries(&backend);
+    try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 3), backend.restore_attempts);
+    try std.testing.expectEqual(@as(usize, 0), guard.count);
+}
+
+test "cleanup bounds persistent failures and retains a later retry" {
+    var backend: Fake = .{ .restore_failures_remaining = 10 };
+    var guard: Guard = .{};
+    try guard.disable(&backend, testInterface());
+    guard.restoreWithRetries(&backend);
+    try std.testing.expect(!backend.enabled);
+    try std.testing.expectEqual(@as(usize, 3), backend.restore_attempts);
+    try std.testing.expectEqual(@as(usize, 1), guard.count);
+    backend.restore_failures_remaining = 0;
+    guard.restoreWithRetries(&backend);
+    try std.testing.expect(backend.enabled);
+    try std.testing.expectEqual(@as(usize, 4), backend.restore_attempts);
     try std.testing.expectEqual(@as(usize, 0), guard.count);
 }
 
