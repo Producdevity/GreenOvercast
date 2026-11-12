@@ -110,6 +110,16 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8) !DecodedMessage {
     var message = DecodedMessage{ .allocator = allocator };
     errdefer message.deinit();
 
+    if (root.get("error")) |server_error| {
+        if (server_error != .null) {
+            if (server_error == .string and std.mem.eql(u8, server_error.string, "peerRemoved")) {
+                message.peer_removed = true;
+            } else {
+                return error.SignalingRejected;
+            }
+        }
+    }
+
     if (root.get("peer_info")) |raw_peer_info| {
         const peer_object = try objectValue(raw_peer_info);
         message.peer_info = .{
@@ -119,8 +129,6 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8) !DecodedMessage {
     }
     message.acknowledgement_id = try optionalUnsigned(root, "ackid");
     message.heartbeat = root.get("hb") != null;
-    if (try optionalString(root, "error")) |error_name|
-        message.peer_removed = std.mem.eql(u8, error_name, "peerRemoved");
 
     const raw_peer_message = root.get("peer_msg") orelse return message;
     const peer_message = try objectValue(raw_peer_message);
@@ -132,8 +140,10 @@ pub fn decode(allocator: std.mem.Allocator, text: []const u8) !DecodedMessage {
         return message;
     }
 
-    const nested = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
-        return error.InvalidPeerPayload;
+    const nested = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.InvalidPeerPayload,
+    };
     defer nested.deinit();
     const payload = objectValue(nested.value) catch return error.InvalidPeerPayload;
     const message_type = try optionalString(payload, "type");
@@ -401,9 +411,21 @@ test "decodes envelope metadata and disconnect messages" {
     defer bye.deinit();
     try std.testing.expect(bye.payload == .bye);
 
-    var removed = try decode(std.testing.allocator, "{\"error\":\"peerRemoved\"}");
+    var removed = try decode(std.testing.allocator, "{\"error\":\"peerRemoved\",\"ackid\":7}");
     defer removed.deinit();
     try std.testing.expect(removed.peer_removed);
+    try std.testing.expectEqual(@as(?u32, 7), removed.acknowledgement_id);
+}
+
+test "non-null server errors fail without exposing their contents" {
+    for ([_][]const u8{
+        "{\"error\":\"requestRejected\"}",
+        "{\"error\":42}",
+        "{\"error\":{\"message\":\"private server details\"}}",
+    }) |text| try std.testing.expectError(error.SignalingRejected, decode(std.testing.allocator, text));
+    var message = try decode(std.testing.allocator, "{\"error\":null,\"ack\":1}");
+    defer message.deinit();
+    try std.testing.expect(message.payload == .none);
 }
 
 test "encodes answer and acknowledgement envelopes" {

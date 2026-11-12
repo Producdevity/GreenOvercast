@@ -180,10 +180,15 @@ pub const Client = struct {
             };
             defer c.go_http_response_destroy(response);
             consecutive_server_errors = 0;
-            const next = try protocol.parseSession(
+            var next = try protocol.parseSession(
                 self.allocator,
                 response.*.data[0..response.*.len],
             );
+            if (!std.mem.eql(u8, next.id, current.id)) {
+                next.deinit();
+                return error.SessionIdentityChanged;
+            }
+            next.retainRouting(current);
             current.deinit();
             self.session = next;
         }
@@ -275,8 +280,8 @@ pub const Client = struct {
             "Origin: https://play.geforcenow.com",
             "Referer: https://play.geforcenow.com/",
             "nv-browser-type: CHROME",
-            "nv-client-streamer: NVIDIA-CLASSIC",
-            "nv-client-type: NATIVE",
+            "nv-client-streamer: WEBRTC",
+            "nv-client-type: BROWSER",
             "nv-client-version: 30.0",
             "nv-device-make: UNKNOWN",
             "nv-device-model: UNKNOWN",
@@ -538,8 +543,8 @@ pub const Client = struct {
             try header(&dynamic_headers[0], "nv-client-id", null, self.auth.protocolClientId()),
             try header(&dynamic_headers[1], "x-device-id", null, self.auth.stableDeviceId()),
             "Accept: application/json",
-            "nv-client-streamer: NVIDIA-CLASSIC",
-            "nv-client-type: NATIVE",
+            "nv-client-streamer: WEBRTC",
+            "nv-client-type: BROWSER",
             "nv-client-version: " ++ client_version,
             "nv-device-os: LINUX",
             "nv-device-type: DESKTOP",
@@ -708,6 +713,31 @@ test "authorization header accepts realistic token lengths" {
     try std.testing.expect(std.mem.endsWith(u8, value, bearer));
 }
 
+test "session allocation and region discovery identify the WebRTC client" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+    };
+    http.replyJson("{}");
+    const response = try client.request("POST", "https://example.invalid/v2/session", "{}", "test-bearer");
+    c.go_http_response_destroy(response);
+    try std.testing.expect(http.last_browser_client and http.last_webrtc_streamer);
+
+    http.replyJson(
+        \\{"metaData":[]}
+    );
+    const region = try client.resolveStreamingUrl("https://example.invalid/", "test-bearer");
+    defer std.testing.allocator.free(region);
+    try std.testing.expect(http.last_browser_client and http.last_webrtc_streamer);
+}
+
 test "queue polling preserves cancellation without retrying the request" {
     const http = @import("gfn_http_fake");
     http.reset();
@@ -736,6 +766,109 @@ test "queue polling preserves cancellation without retrying the request" {
     ));
     try std.testing.expectEqual(@as(usize, 1), http.requests);
     try std.testing.expectEqual(@as(usize, 1), http.polls);
+}
+
+test "queue polling retains an assigned seat when a ready poll omits routing" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    http.replyJson(
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"connectionInfo":[],"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net"}}}
+    );
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+        .streaming_url = @constCast("https://example.invalid/"),
+        .session = try protocol.parseSession(std.testing.allocator,
+            \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":1,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443,"resourcePath":"/nvst/"},{"usage":2,"ip":"203.0.113.11","port":49005}]}}
+        ),
+    };
+    defer client.session.?.deinit();
+    try client.waitUntilReady();
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", client.session.?.signaling_url.?);
+    try std.testing.expectEqualStrings("203.0.113.11", client.session.?.media_ip.?);
+    try std.testing.expectEqual(@as(?u16, 49005), client.session.?.media_port);
+    try std.testing.expectEqual(@as(usize, 1), http.requests);
+}
+
+test "a ready response without endpoints keeps polling until a seat endpoint arrives" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    const Handler = struct {
+        fn respond(_: []const u8, _: []const u8) void {
+            http.replyJson(
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443,"resourcePath":"/nvst/"}]}}
+            );
+        }
+    };
+    http.on_request = Handler.respond;
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+        .streaming_url = @constCast("https://example.invalid/"),
+        .session = try protocol.parseSession(std.testing.allocator,
+            \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2}}
+        ),
+    };
+    defer client.session.?.deinit();
+    try client.waitUntilReady();
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", client.session.?.signaling_url.?);
+    try std.testing.expectEqual(@as(usize, 1), http.requests);
+}
+
+test "a ready session exposes its control-host fallback without more polling" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+        .session = try protocol.parseSession(std.testing.allocator,
+            \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":2,"sessionAdsRequired":false,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net","port":443}}}
+        ),
+    };
+    defer client.session.?.deinit();
+    try client.waitUntilReady();
+    try std.testing.expectEqualStrings("wss://np-example.cloudmatchbeta.nvidiagrid.net:443/nvst/", client.session.?.signaling_url.?);
+    try std.testing.expectEqual(@as(usize, 0), http.requests);
+    try std.testing.expectEqual(@as(usize, 0), http.polls);
+}
+
+test "a poll for another session is rejected without replacing owned state" {
+    const http = @import("gfn_http_fake");
+    http.reset();
+    defer http.reset();
+    http.cancel_on_poll = std.math.maxInt(usize);
+    http.replyJson(
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"another-session","status":2,"sessionControlInfo":{"ip":"203.0.113.20"}}}
+    );
+    var auth = http.authClient(auth_client.Client);
+    var client = Client{
+        .allocator = std.testing.allocator,
+        .auth = &auth,
+        .ui = @ptrCast(auth.ui),
+        .client_id = [_]u8{0} ** 37,
+        .streaming_url = @constCast("https://example.invalid/"),
+        .session = try protocol.parseSession(std.testing.allocator,
+            \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"test-session","status":1,"sessionControlInfo":{"ip":"203.0.113.10"}}}
+        ),
+    };
+    defer client.session.?.deinit();
+    try std.testing.expectError(error.SessionIdentityChanged, client.waitUntilReady());
+    try std.testing.expectEqualStrings("test-session", client.session.?.id);
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", client.session.?.signaling_url.?);
 }
 
 test "ended sessions stop polling and deletion accepts an empty success response" {

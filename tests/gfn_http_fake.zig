@@ -14,6 +14,8 @@ pub var response: ?*Response = null;
 pub var on_request: ?*const fn ([]const u8, []const u8) void = null;
 pub var last_body: [8192]u8 = undefined;
 pub var last_body_length: usize = 0;
+pub var last_browser_client = false;
+pub var last_webrtc_streamer = false;
 
 pub fn reset() void {
     requests = 0;
@@ -23,6 +25,8 @@ pub fn reset() void {
     response = null;
     on_request = null;
     last_body_length = 0;
+    last_browser_client = false;
+    last_webrtc_streamer = false;
 }
 
 var no_content = Response{ .data = null, .len = 0, .status = 204 };
@@ -62,13 +66,23 @@ export fn go_http_request_bounded_cancelable(
     method: [*:0]const u8,
     url: [*:0]const u8,
     body: ?[*:0]const u8,
-    _: ?[*]const [*:0]const u8,
-    _: c_int,
+    headers: ?[*]const [*:0]const u8,
+    header_count: c_int,
     _: usize,
     cancel: ?*const fn (?*anyopaque) callconv(.c) c_int,
     context: ?*anyopaque,
 ) ?*Response {
     requests += 1;
+    last_browser_client = false;
+    last_webrtc_streamer = false;
+    if (headers) |values| {
+        if (header_count < 0 or header_count > 64) return null;
+        for (values[0..@intCast(header_count)]) |value| {
+            const text = std.mem.span(value);
+            if (std.mem.eql(u8, text, "nv-client-type: BROWSER")) last_browser_client = true;
+            if (std.mem.eql(u8, text, "nv-client-streamer: WEBRTC")) last_webrtc_streamer = true;
+        }
+    }
     if (cancel) |check| {
         if (check(context) != 0) return null;
     }

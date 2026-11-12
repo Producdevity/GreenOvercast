@@ -22,6 +22,7 @@ pub const Session = struct {
     queue_position: ?u32,
     setup_step: ?u32,
     signaling_url: ?[]u8,
+    signaling_from_connection: bool = false,
     media_ip: ?[]u8,
     media_port: ?u16,
     ice_servers: []IceServer,
@@ -34,6 +35,32 @@ pub const Session = struct {
     pub fn ended(self: *const Session) bool {
         // Status 6 is cleanup before provisioning can resume.
         return self.status > 3 and self.status != 6;
+    }
+
+    pub fn retainRouting(self: *Session, previous: *Session) void {
+        if (!std.mem.eql(u8, self.id, previous.id) or self.status > 3 or previous.status > 3) return;
+        if (self.media_ip != null and previous.media_ip != null and
+            (!std.mem.eql(u8, self.media_ip.?, previous.media_ip.?) or self.media_port != previous.media_port)) return;
+        if (self.signaling_url != null and previous.signaling_url != null) {
+            if (!self.signaling_from_connection and previous.signaling_from_connection) {
+                self.allocator.free(self.signaling_url.?);
+                self.signaling_url = null;
+            } else if (!std.mem.eql(u8, self.signaling_url.?, previous.signaling_url.?)) return;
+        }
+
+        if (self.signaling_url == null) {
+            self.signaling_url = previous.signaling_url;
+            self.signaling_from_connection = previous.signaling_from_connection;
+            previous.signaling_url = null;
+            previous.signaling_from_connection = false;
+        }
+        if (self.media_ip == null) {
+            self.media_ip = previous.media_ip;
+            self.media_port = previous.media_port;
+            previous.media_ip = null;
+            previous.media_port = null;
+        }
+        if (self.ice_servers.len == 0) std.mem.swap([]IceServer, &self.ice_servers, &previous.ice_servers);
     }
 
     pub fn deinit(self: *Session) void {
@@ -118,7 +145,7 @@ pub fn buildSessionRequest(
             .clientVersion = "30.0",
             .sdkVersion = "1.0",
             .streamerVersion = 1,
-            .clientPlatformName = "windows",
+            .clientPlatformName = "browser",
             .clientRequestMonitorSettings = &.{.{
                 .monitorId = 0,
                 .positionX = 0,
@@ -296,12 +323,12 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
     const setup_step = nestedUnsigned(session, "seatSetupStep") orelse
         nestedUnsigned(session, "seatSetupInfo.seatSetupStep");
 
-    var signaling_ip: ?[]u8 = null;
-    var signaling_path: ?[]u8 = null;
+    var signaling_url: ?[]u8 = null;
+    var signaling_from_connection = false;
+    var signaling_uses_rtsp = false;
     var media_ip: ?[]u8 = null;
     var media_port: ?u16 = null;
-    errdefer if (signaling_ip) |value| allocator.free(value);
-    errdefer if (signaling_path) |value| allocator.free(value);
+    errdefer if (signaling_url) |value| allocator.free(value);
     errdefer if (media_ip) |value| allocator.free(value);
     if (session.get("connectionInfo")) |connections_value| {
         const connections = switch (connections_value) {
@@ -311,53 +338,58 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
         if (connections) |values| for (values.items) |connection_value| {
             const connection = object(connection_value) catch continue;
             const usage = optionalUnsigned(connection, "usage") orelse continue;
-            const ip = if (connection.get("ip")) |value| duplicateIp(allocator, value) catch |err| switch (err) {
+            var ip = if (connection.get("ip")) |value| duplicateIp(allocator, value) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => null,
             } else null;
-            errdefer if (ip) |value| allocator.free(value);
+            defer if (ip) |value| allocator.free(value);
             const port_value = optionalUnsigned(connection, "port");
-            const port: ?u16 = if (port_value != null and port_value.? <= std.math.maxInt(u16)) @intCast(port_value.?) else null;
+            const port: ?u16 = if (port_value != null and port_value.? > 0 and port_value.? <= std.math.maxInt(u16)) @intCast(port_value.?) else null;
             const path = duplicateOptionalString(allocator, connection, "resourcePath") catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => null,
             };
-            errdefer if (path) |value| allocator.free(value);
-            if (usage == 14 and signaling_ip == null) {
-                if (signaling_path) |value| allocator.free(value);
-                signaling_ip = ip;
-                signaling_path = path;
+            defer if (path) |value| allocator.free(value);
+            if (usage == 14 and (signaling_url == null or signaling_uses_rtsp)) {
+                const absolute = path != null and std.mem.indexOf(u8, path.?, "://") != null;
+                if (!absolute and (ip == null or (port_value != null and port == null))) continue;
+                const uses_rtsp = if (path) |resource|
+                    std.mem.startsWith(u8, resource, "rtsp://") or std.mem.startsWith(u8, resource, "rtsps://")
+                else
+                    false;
+                if (signaling_url != null and uses_rtsp) continue;
+                const url = buildSignalingUrl(allocator, ip orelse "", port, path) catch |err| switch (err) {
+                    error.InvalidSignalingEndpoint => continue,
+                    else => return err,
+                };
+                if (signaling_url) |old| allocator.free(old);
+                signaling_url = url;
+                signaling_from_connection = true;
+                signaling_uses_rtsp = uses_rtsp;
             } else if ((usage == 2 or usage == 17) and media_ip == null and ip != null and port != null) {
                 media_ip = ip;
                 media_port = port;
-                if (path) |value| allocator.free(value);
-            } else {
-                if (ip) |value| allocator.free(value);
-                if (path) |value| allocator.free(value);
+                ip = null;
             }
         };
     }
-    if (signaling_ip == null) {
+    if (signaling_url == null) {
         if (session.get("sessionControlInfo")) |control_value| {
             const control = object(control_value) catch null;
             if (control) |value| {
-                if (value.get("ip")) |ip| signaling_ip = duplicateIp(allocator, ip) catch |err| switch (err) {
-                    error.OutOfMemory => return err,
-                    else => null,
-                };
+                if (value.get("ip")) |raw_ip| {
+                    const ip = duplicateIp(allocator, raw_ip) catch |err| switch (err) {
+                        error.OutOfMemory => return err,
+                        else => null,
+                    };
+                    if (ip) |address| {
+                        defer allocator.free(address);
+                        signaling_url = try buildSignalingUrl(allocator, address, null, null);
+                    }
+                }
             }
         }
     }
-    const signaling_url = if (signaling_ip) |ip|
-        try buildSignalingUrl(allocator, ip, signaling_path)
-    else
-        null;
-    errdefer if (signaling_url) |value| allocator.free(value);
-    if (signaling_ip) |value| allocator.free(value);
-    if (signaling_path) |value| allocator.free(value);
-    signaling_ip = null;
-    signaling_path = null;
-
     const ice_servers = try parseIceServers(allocator, session);
     errdefer {
         for (ice_servers) |*server| server.deinit(allocator);
@@ -371,6 +403,7 @@ pub fn parseSession(allocator: std.mem.Allocator, data: []const u8) !Session {
         .queue_position = boundedU32(queue_position),
         .setup_step = boundedU32(setup_step),
         .signaling_url = signaling_url,
+        .signaling_from_connection = signaling_from_connection,
         .media_ip = media_ip,
         .media_port = media_port,
         .ice_servers = ice_servers,
@@ -387,21 +420,33 @@ fn boundedU32(value: ?u64) ?u32 {
 fn buildSignalingUrl(
     allocator: std.mem.Allocator,
     ip: []const u8,
+    port: ?u16,
     path: ?[]const u8,
 ) ![]u8 {
     const resource = path orelse "/nvst/";
-    if (std.mem.startsWith(u8, resource, "wss://")) return allocator.dupe(u8, resource);
-    if (std.mem.startsWith(u8, resource, "rtsps://") or
-        std.mem.startsWith(u8, resource, "rtsp://"))
-    {
-        const delimiter = std.mem.indexOf(u8, resource, "://").? + 3;
-        const end = std.mem.indexOfScalarPos(u8, resource, delimiter, '/') orelse resource.len;
-        const host = resource[delimiter..end];
-        return std.fmt.allocPrint(allocator, "wss://{s}/nvst/", .{host});
+    if (std.mem.indexOf(u8, resource, "://") != null) {
+        var uri = std.Uri.parse(resource) catch return error.InvalidSignalingEndpoint;
+        if (uri.host == null or uri.user != null or uri.password != null or uri.fragment != null or
+            (uri.port != null and uri.port.? == 0) or
+            (!std.mem.eql(u8, uri.scheme, "wss") and !std.mem.eql(u8, uri.scheme, "https") and
+                !std.mem.eql(u8, uri.scheme, "rtsps") and !std.mem.eql(u8, uri.scheme, "rtsp")))
+            return error.InvalidSignalingEndpoint;
+        if (std.mem.eql(u8, uri.scheme, "rtsp") or std.mem.eql(u8, uri.scheme, "rtsps")) {
+            // RTSP allocations share the seat host, not the WebRTC port or path.
+            uri.port = 443;
+            uri.path = .{ .raw = "/nvst/" };
+            uri.query = null;
+        } else uri.port = uri.port orelse 443;
+        uri.scheme = "wss";
+        if (uri.path.isEmpty()) uri.path = .{ .raw = "/nvst/" };
+        return std.fmt.allocPrint(allocator, "{}", .{uri});
     }
-    if (std.mem.startsWith(u8, resource, "/"))
-        return std.fmt.allocPrint(allocator, "wss://{s}:443{s}", .{ ip, resource });
-    return std.fmt.allocPrint(allocator, "wss://{s}:443/nvst/", .{ip});
+    const normalized_path = if (resource.len == 0) "/nvst/" else resource;
+    const slash: []const u8 = if (std.mem.startsWith(u8, normalized_path, "/")) "" else "/";
+    return if (std.mem.indexOfScalar(u8, ip, ':') != null and !std.mem.startsWith(u8, ip, "["))
+        std.fmt.allocPrint(allocator, "wss://[{s}]:{d}{s}{s}", .{ ip, port orelse 443, slash, normalized_path })
+    else
+        std.fmt.allocPrint(allocator, "wss://{s}:{d}{s}{s}", .{ ip, port orelse 443, slash, normalized_path });
 }
 
 fn parseIceServers(allocator: std.mem.Allocator, session: std.json.ObjectMap) ![]IceServer {
@@ -671,6 +716,7 @@ test "builds a display-matched WebRTC session request" {
     try std.testing.expect(std.mem.indexOf(u8, body, "\"widthInPixels\":640") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"heightInPixels\":480") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "GSStreamerType") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"clientPlatformName\":\"browser\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"appId\":202") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"cmsId\":\"202\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"internalTitle\":\"Test Game\"") != null);
@@ -838,4 +884,230 @@ test "session parsing releases partial allocations" {
             defer session.deinit();
         }
     }.run, .{});
+}
+
+test "relative signaling paths preserve the assigned port" {
+    var session = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":8443,"resourcePath":"/nvst/"}]}}
+    );
+    defer session.deinit();
+    try std.testing.expectEqualStrings("wss://203.0.113.10:8443/nvst/", session.signaling_url.?);
+}
+
+test "absolute signaling URLs ignore invalid side-band ports" {
+    for ([_]u32{ 0, 65536 }) |port| {
+        for ([_]struct { resource: []const u8, expected: []const u8 }{
+            .{ .resource = "wss://seat.example.invalid:9443/custom/", .expected = "wss://seat.example.invalid:9443/custom/" },
+            .{ .resource = "https://seat.example.invalid/nvst/", .expected = "wss://seat.example.invalid:443/nvst/" },
+            .{ .resource = "rtsps://seat.example.invalid:48322/session", .expected = "wss://seat.example.invalid:443/nvst/" },
+        }) |case| {
+            const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,\"connectionInfo\":[{{\"usage\":14,\"ip\":\"203.0.113.1\",\"port\":{d},\"resourcePath\":\"{s}\"}}]}}}}", .{ port, case.resource });
+            defer std.testing.allocator.free(bytes);
+            var session = try parseSession(std.testing.allocator, bytes);
+            defer session.deinit();
+            const url = session.signaling_url orelse return error.MissingSignalingEndpoint;
+            try std.testing.expectEqualStrings(case.expected, url);
+        }
+    }
+}
+
+test "malformed signaling candidates preserve later routes and cleanup ownership" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var session = try parseSession(allocator,
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"resourcePath":"ws://seat.example.invalid/nvst/"},{"usage":14,"resourcePath":"wss://user@seat.example.invalid/nvst/"},{"usage":14,"resourcePath":"wss://seat.example.invalid:0/nvst/"},{"usage":14,"ip":"203.0.113.10","port":8443,"resourcePath":"/nvst/"}]}}
+            );
+            defer session.deinit();
+            try std.testing.expectEqualStrings("one", session.id);
+            try std.testing.expectEqualStrings("wss://203.0.113.10:8443/nvst/", session.signaling_url.?);
+            try std.testing.expect(session.signaling_from_connection);
+        }
+    }.run, .{});
+
+    for ([_]bool{ false, true }) |control| {
+        const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,{s}\"connectionInfo\":[{{\"usage\":14,\"resourcePath\":\"invalid://seat.example.invalid/nvst/\"}}]}}}}", .{if (control) "\"sessionControlInfo\":{\"ip\":\"203.0.113.20\"}," else ""});
+        defer std.testing.allocator.free(bytes);
+        var session = try parseSession(std.testing.allocator, bytes);
+        defer session.deinit();
+        try std.testing.expectEqualStrings("one", session.id);
+        if (control) {
+            try std.testing.expectEqualStrings("wss://203.0.113.20:443/nvst/", session.signaling_url.?);
+        } else try std.testing.expect(session.signaling_url == null);
+    }
+}
+
+test "WebSocket endpoints preserve their authority and RTSP allocations use the WebRTC route" {
+    for ([_]struct { resource: []const u8, expected: []const u8 }{
+        .{ .resource = "wss://seat.example.invalid:9443/nvst/", .expected = "wss://seat.example.invalid:9443/nvst/" },
+        .{ .resource = "rtsps://seat.example.invalid:48322/custom/?token=test", .expected = "wss://seat.example.invalid:443/nvst/" },
+        .{ .resource = "rtsp://seat.example.invalid:322/custom/", .expected = "wss://seat.example.invalid:443/nvst/" },
+        .{ .resource = "https://seat.example.invalid/custom/", .expected = "wss://seat.example.invalid:443/custom/" },
+    }) |case| {
+        const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,\"connectionInfo\":[{{\"usage\":14,\"port\":8443,\"resourcePath\":\"{s}\"}}]}}}}", .{case.resource});
+        defer std.testing.allocator.free(bytes);
+        var session = try parseSession(std.testing.allocator, bytes);
+        defer session.deinit();
+        try std.testing.expectEqualStrings(case.expected, session.signaling_url.?);
+    }
+    const ipv6 = try buildSignalingUrl(std.testing.allocator, "2001:db8::1", 8443, "/nvst/");
+    defer std.testing.allocator.free(ipv6);
+    try std.testing.expectEqualStrings("wss://[2001:db8::1]:8443/nvst/", ipv6);
+}
+
+test "signaling endpoints reject insecure URLs and leave unassigned ports pending" {
+    for ([_][]const u8{ "ws://example.invalid/nvst/", "wss://user@example.invalid/nvst/", "wss://example.invalid:0/nvst/" }) |resource|
+        try std.testing.expectError(error.InvalidSignalingEndpoint, buildSignalingUrl(std.testing.allocator, "203.0.113.1", 443, resource));
+    for ([_]u32{ 0, 65536 }) |port| {
+        const bytes = try std.fmt.allocPrint(std.testing.allocator, "{{\"requestStatus\":{{\"statusCode\":1}},\"session\":{{\"sessionId\":\"one\",\"status\":2,\"connectionInfo\":[{{\"usage\":14,\"ip\":\"203.0.113.1\",\"port\":{d}}}]}}}}", .{port});
+        defer std.testing.allocator.free(bytes);
+        var session = try parseSession(std.testing.allocator, bytes);
+        defer session.deinit();
+        try std.testing.expect(session.signaling_url == null);
+    }
+}
+
+test "an advertised DNS seat takes precedence over the control host" {
+    var session = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net"},"connectionInfo":[{"usage":14,"port":322,"resourcePath":"rtsps://seat.cloudmatchbeta.nvidiagrid.net:322/session"},{"usage":14,"port":48322,"resourcePath":"rtsps://seat.cloudmatchbeta.nvidiagrid.net:48322/session"}]}}
+    );
+    defer session.deinit();
+    try std.testing.expectEqualStrings("wss://seat.cloudmatchbeta.nvidiagrid.net:443/nvst/", session.signaling_url.?);
+    try std.testing.expect(session.signaling_from_connection);
+}
+
+test "an explicit WebSocket endpoint takes precedence over RTSP-derived signaling" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var session = try parseSession(allocator,
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"port":322,"resourcePath":"rtsps://seat.example.invalid:322/session"},{"usage":14,"port":48322,"resourcePath":"rtsps://seat.example.invalid:48322/session"},{"usage":14,"port":8443,"resourcePath":"wss://webrtc.example.invalid:9443/nvst/"}]}}
+            );
+            defer session.deinit();
+            try std.testing.expectEqualStrings("wss://webrtc.example.invalid:9443/nvst/", session.signaling_url.?);
+        }
+    }.run, .{});
+}
+
+test "a ready zone-only session retains its advertised signaling fallback" {
+    var session = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionAdsRequired":false,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net","port":443}}}
+    );
+    defer session.deinit();
+    try std.testing.expect(session.ready());
+    try std.testing.expect(session.signaling_url != null);
+    try std.testing.expectEqualStrings("wss://np-example.cloudmatchbeta.nvidiagrid.net:443/nvst/", session.signaling_url.?);
+    try std.testing.expect(!session.signaling_from_connection);
+}
+
+const routed_session =
+    \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":1,"connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443,"resourcePath":"/nvst/"},{"usage":2,"ip":"203.0.113.11","port":49005}],"iceServerConfiguration":{"iceServers":[{"urls":"stun:example.invalid:3478"}]}}}
+;
+
+test "routing retention transfers ownership of omitted seat and ICE data" {
+    var previous = try parseSession(std.testing.allocator, routed_session);
+    defer previous.deinit();
+    var next = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[]}}
+    );
+    defer next.deinit();
+    next.retainRouting(&previous);
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", next.signaling_url.?);
+    try std.testing.expectEqualStrings("203.0.113.11", next.media_ip.?);
+    try std.testing.expectEqual(@as(?u16, 49005), next.media_port);
+    try std.testing.expectEqual(@as(usize, 1), next.ice_servers.len);
+    try std.testing.expect(previous.signaling_url == null and previous.media_ip == null);
+    try std.testing.expect(next.signaling_from_connection);
+    try std.testing.expect(!previous.signaling_from_connection);
+    try std.testing.expectEqual(@as(usize, 0), previous.ice_servers.len);
+}
+
+test "a control fallback does not replace an advertised seat learned while queuing" {
+    var previous = try parseSession(std.testing.allocator, routed_session);
+    defer previous.deinit();
+    var next = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net"}}}
+    );
+    defer next.deinit();
+    next.retainRouting(&previous);
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", next.signaling_url.?);
+    try std.testing.expectEqualStrings("203.0.113.11", next.media_ip.?);
+    try std.testing.expectEqual(@as(usize, 1), next.ice_servers.len);
+    try std.testing.expect(previous.signaling_url == null and previous.media_ip == null);
+}
+
+test "a control fallback with new media does not inherit an old seat" {
+    var previous = try parseSession(std.testing.allocator, routed_session);
+    defer previous.deinit();
+    var next = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net"},"connectionInfo":[{"usage":2,"ip":"203.0.113.21","port":49005}]}}
+    );
+    defer next.deinit();
+    next.retainRouting(&previous);
+    try std.testing.expectEqualStrings("wss://np-example.cloudmatchbeta.nvidiagrid.net:443/nvst/", next.signaling_url.?);
+    try std.testing.expectEqualStrings("203.0.113.21", next.media_ip.?);
+    try std.testing.expectEqual(@as(usize, 0), next.ice_servers.len);
+    try std.testing.expect(previous.signaling_url != null and previous.media_ip != null);
+}
+
+test "zone signaling fallback parsing releases partial allocations" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var session = try parseSession(allocator,
+                \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionAdsRequired":false,"sessionControlInfo":{"ip":"np-example.cloudmatchbeta.nvidiagrid.net"}}}
+            );
+            defer session.deinit();
+        }
+    }.run, .{});
+}
+
+test "routing is not retained across new seats sessions or cleanup" {
+    for ([_][]const u8{
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"ip":"203.0.113.20","port":443}]}}
+        ,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":14,"port":48322,"resourcePath":"rtsps://seat.cloudmatchbeta.nvidiagrid.net:48322/session"}]}}
+        ,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"connectionInfo":[{"usage":2,"ip":"203.0.113.21","port":49005}]}}
+        ,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"two","status":2}}
+        ,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":4}}
+        ,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":6}}
+    }) |bytes| {
+        var previous = try parseSession(std.testing.allocator, routed_session);
+        defer previous.deinit();
+        var next = try parseSession(std.testing.allocator, bytes);
+        defer next.deinit();
+        next.retainRouting(&previous);
+        try std.testing.expect(previous.signaling_url != null and previous.media_ip != null);
+        try std.testing.expectEqual(@as(usize, 0), next.ice_servers.len);
+    }
+    var previous = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":6,"sessionControlInfo":{"ip":"203.0.113.10"}}}
+    );
+    defer previous.deinit();
+    var next = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":1}}
+    );
+    defer next.deinit();
+    next.retainRouting(&previous);
+    try std.testing.expect(next.signaling_url == null);
+}
+
+test "advertised route provenance survives an identical control fallback" {
+    var previous = try parseSession(std.testing.allocator, routed_session);
+    defer previous.deinit();
+    var same = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":1,"sessionControlInfo":{"ip":"203.0.113.10"}}}
+    );
+    defer same.deinit();
+    same.retainRouting(&previous);
+    try std.testing.expect(same.signaling_from_connection);
+    var next = try parseSession(std.testing.allocator,
+        \\{"requestStatus":{"statusCode":1},"session":{"sessionId":"one","status":2,"sessionControlInfo":{"ip":"control.example.invalid"}}}
+    );
+    defer next.deinit();
+    next.retainRouting(&same);
+    try std.testing.expectEqualStrings("wss://203.0.113.10:443/nvst/", next.signaling_url.?);
+    try std.testing.expect(next.signaling_from_connection);
+    try std.testing.expectEqualStrings("203.0.113.11", next.media_ip.?);
 }

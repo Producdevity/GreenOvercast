@@ -136,6 +136,32 @@ hash_file() {
   fi
 }
 
+fetch_file() (
+  file_name=$1
+  file_url=$2
+  expected_hash=$3
+  destination="$DOWNLOADS/$file_name"
+  download="$destination"
+
+  if [ ! -f "$destination" ]; then
+    download=$(mktemp "$DOWNLOADS/.${file_name}.XXXXXX")
+    trap 'rm -f "$download"' EXIT
+    trap 'exit 1' HUP INT TERM
+    echo "fetching $file_url"
+    curl -fLSs --connect-timeout 20 --speed-time 60 --speed-limit 1024 \
+      --retry 3 --retry-all-errors --retry-max-time 240 \
+      "$file_url" -o "$download" || exit "$?"
+  fi
+  actual_hash=$(hash_file "$download")
+  [ "$actual_hash" = "$expected_hash" ] || {
+    echo "sha256 mismatch for $file_name" >&2
+    exit 1
+  }
+  if [ "$download" != "$destination" ]; then
+    mv "$download" "$destination"
+  fi
+)
+
 fetch_source() {
   archive_name=$1
   source_name=$2
@@ -144,37 +170,12 @@ fetch_source() {
   archive="$DOWNLOADS/$archive_name"
   source_dir="$SOURCES/$source_name"
 
-  if [ ! -f "$archive" ]; then
-    echo "fetching $source_url"
-    curl -fL --retry 3 "$source_url" -o "$archive"
-  fi
-  actual_hash=$(hash_file "$archive")
-  [ "$actual_hash" = "$expected_hash" ] || {
-    echo "sha256 mismatch for $archive_name" >&2
-    exit 1
-  }
+  fetch_file "$archive_name" "$source_url" "$expected_hash"
   if [ ! -d "$source_dir" ]; then
     tar -xf "$archive" -C "$SOURCES"
   fi
   [ -d "$source_dir" ] || {
     echo "archive did not contain $source_name" >&2
-    exit 1
-  }
-}
-
-fetch_file() {
-  file_name=$1
-  file_url=$2
-  expected_hash=$3
-  destination="$DOWNLOADS/$file_name"
-
-  if [ ! -f "$destination" ]; then
-    echo "fetching $file_url"
-    curl -fL --retry 3 "$file_url" -o "$destination"
-  fi
-  actual_hash=$(hash_file "$destination")
-  [ "$actual_hash" = "$expected_hash" ] || {
-    echo "sha256 mismatch for $file_name" >&2
     exit 1
   }
 }
@@ -204,7 +205,7 @@ fetch_source SDL2-2.28.5.tar.gz SDL2-2.28.5 \
   https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz \
   332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4
 fetch_source zlib-1.3.2.tar.gz zlib-1.3.2 \
-  https://zlib.net/zlib-1.3.2.tar.gz \
+  https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz \
   bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
 fetch_source expat-2.8.5.tar.xz expat-2.8.5 \
   https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz \

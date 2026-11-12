@@ -588,6 +588,12 @@ pub fn build(b: *std.Build) void {
     });
     dependency_toolchain_test.setCwd(b.path("."));
     test_step.dependOn(&dependency_toolchain_test.step);
+    const dependency_download_test = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tests/dependency_download_test.py"),
+    });
+    dependency_download_test.setCwd(b.path("."));
+    test_step.dependOn(&dependency_download_test.step);
     const aarch64_runtime_test = b.addSystemCommand(&.{
         "sh",
         b.pathFromRoot("tests/aarch64_runtime_test.sh"),
@@ -602,6 +608,7 @@ pub fn build(b: *std.Build) void {
         imports: []const ZigImport = &.{},
     }{
         .{ .source = "src/app/state.zig" },
+        .{ .source = "src/platform/linux/wifi_power_save.zig" },
         .{ .source = "src/catalog/catalog_parser.zig" },
         .{ .source = "src/catalog/catalog_search.zig" },
         .{ .source = "src/input/wire_encoder.zig" },
@@ -642,6 +649,11 @@ pub fn build(b: *std.Build) void {
         .{ .source = "src/provider/geforce_now/subscription_protocol.zig" },
         .{ .source = "src/provider/geforce_now/provider_protocol.zig" },
         .{ .source = "src/provider/geforce_now/signaling_protocol.zig" },
+        .{
+            .source = "src/provider/geforce_now/signaling_client.zig",
+            .project_includes = true,
+            .imports = &.{.{ .name = "gfn_websocket_fake", .path = "tests/gfn_websocket_fake.zig" }},
+        },
         .{ .source = "src/provider/geforce_now/sdp_protocol.zig" },
         .{
             .source = "src/provider/geforce_now/auth_protocol.zig",
@@ -686,7 +698,10 @@ pub fn build(b: *std.Build) void {
             .source = "src/provider/geforce_now/webrtc_session.zig",
             .project_includes = true,
             .sdl = true,
-            .imports = &.{.{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" }},
+            .imports = &.{
+                .{ .name = "gfn_video_feedback_fake", .path = "tests/gfn_video_feedback_fake.zig" },
+                .{ .name = "gfn_websocket_fake", .path = "tests/gfn_websocket_fake.zig" },
+            },
         },
     };
     for (tests) |test_config|
